@@ -2,6 +2,12 @@
   "name": "oracle-mcp-server",
   "version": "0.1.0",
   "description": "Oracle Database MCP Server for Claude – stdio & HTTP",
+  "license": "MIT",
+  "author": "Tommi2Day",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tommi2Day/oracle-mcp-server.git"
+  },
   "main": "dist/index.js",
   "type": "module",
   "private": true,

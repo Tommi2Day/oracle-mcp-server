@@ -381,3 +381,9 @@ Source layout: `src/oracle.ts` (connect strings, JDBC parsing, pool attributes, 
 `src/lib.ts` (logging, auth, token store, admin API), `src/perf.ts` (performance tools and licence gating),
 `src/format.ts` (result formatting), `src/index.ts` (MCP tools, HTTP routing, startup).
 Log format: see [docs/logging.md](docs/logging.md). Performance tools: [docs/performance.md](docs/performance.md).
+
+---
+
+## License
+
+[MIT](LICENSE) © Tommi2Day

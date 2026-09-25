@@ -57,3 +57,7 @@ Licensed tools are **off by default** and can be switched per token.
 `ORA_SERVICE_NAME`, `ORA_SID`, `ORA_PROTOCOL`, `ORA_USER`, `ORA_PASSWORD`, `ORA_WALLET_LOCATION`,
 `ORA_WALLET_PASSWORD`, `ORA_SSL_SERVER_DN_MATCH`, `ORA_SSL_SERVER_CERT_DN`, `ORA_TLS_CA_FILE`,
 `ORA_DRIVER_MODE`, `ORA_PERF_TOOLS`, `ORA_DIAGNOSTICS_PACK`, `ORA_TUNING_PACK`, `TLS_ENABLED`, `LOG_LEVEL` — see the GitHub README for the full reference.
+
+## License
+
+MIT — see https://github.com/Tommi2Day/oracle-mcp-server/blob/main/LICENSE
