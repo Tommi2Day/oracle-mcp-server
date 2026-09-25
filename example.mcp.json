@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "oracle-test": {
+      "type": "http",
+      "url": "https://oracle-mcp-server.local:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer xxxxxx"
+      }
+    },
+    "oracle-local-stdio": {
+      "command": "node",
+      "args": ["/path/to/oracle-mcp-server/dist/index.js"],
+      "env": {
+        "ORA_CONNECT_STRING": "jdbc:oracle:thin:@//localhost:1521/FREEPDB1",
+        "ORA_USER": "mcp",
+        "ORA_PASSWORD": "mcp_pw"
+      }
+    }
+  }
+}

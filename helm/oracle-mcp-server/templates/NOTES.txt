@@ -1,0 +1,57 @@
+Oracle MCP Server deployed!
+
+  Release  : {{ .Release.Name }}
+  Namespace: {{ .Release.Namespace }}
+  Version  : {{ .Chart.AppVersion }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STATUS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  HTTP TLS     : {{ if .Values.server.tlsEnabled }}HTTPS enabled{{ else }}HTTP (no TLS){{ end }}
+  mTLS Clients : {{ if .Values.tls.clientCaSecret }}enabled{{ else }}-{{ end }}
+  Driver mode  : {{ .Values.oracle.driverMode | default "thin" }}
+  Perf tools   : {{ if ne (toString .Values.oracle.perfTools) "false" }}on{{ else }}off{{ end }} · Diagnostics Pack {{ if .Values.oracle.diagnosticsPack }}on{{ else }}off{{ end }} · Tuning Pack {{ if .Values.oracle.tuningPack }}on{{ else }}off{{ end }}
+  TNS_ADMIN    : {{ .Values.tnsAdmin.mountPath }}{{ if or .Values.tnsAdmin.existingSecret .Values.tnsAdmin.existingConfigMap .Values.tnsAdmin.files }} (mounted){{ else }} (empty – no tnsnames.ora / wallet){{ end }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  DATABASE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{{- if .Values.oracle.connectString }}
+  Connect : {{ .Values.oracle.connectString }}
+{{- else if .Values.oracle.tnsAlias }}
+  Alias   : {{ .Values.oracle.tnsAlias }}
+{{- else }}
+  Target  : {{ .Values.oracle.protocol | default "tcp" }}://{{ .Values.oracle.host }}:{{ .Values.oracle.port }}/{{ .Values.oracle.serviceName | default .Values.oracle.sid }}
+{{- end }}
+  User    : {{ .Values.oracle.user }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  MCP ENDPOINT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{{- $scheme := "http" }}{{ if .Values.server.tlsEnabled }}{{ $scheme = "https" }}{{ end }}
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  {{ $scheme }}://{{ .host }}/mcp
+{{- end }}
+{{- else if eq .Values.service.type "LoadBalancer" }}
+  Wait for external IP:
+  kubectl get svc -n {{ .Release.Namespace }} {{ include "oracle-mcp-server.fullname" . }}
+  MCP: {{ $scheme }}://<EXTERNAL-IP>:{{ .Values.service.port }}/mcp
+{{- else }}
+  Port-forward for local testing:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "oracle-mcp-server.fullname" . }} 3000:{{ .Values.service.port }}
+  MCP: {{ $scheme }}://localhost:3000/mcp
+{{- end }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  CLAUDE DESKTOP / .mcp.json CONFIG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  {
+    "mcpServers": {
+      "oracle": {
+        "type": "http",
+        "url": "{{ $scheme }}://<YOUR-HOST>:{{ .Values.service.port }}/mcp",
+        "headers": { "Authorization": "Bearer <AUTH_TOKEN>" }
+      }
+    }
+  }

@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    tags:
+    - '[0-9]+.[0-9]+.[0-9]+'
+
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Docker image tag (e.g. 1.2.3)"
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  bump-version:
+    name: Bump version
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Update package.json, openapi.json and Chart.yaml
+        run: |
+          npm version "${{ inputs.tag }}" --no-git-tag-version
+          node --input-type=commonjs -e "
+            const fs = require('fs'), v = '${{ inputs.tag }}';
+            const a = JSON.parse(fs.readFileSync('openapi.json'));
+            a.info.version = v;
+            fs.writeFileSync('openapi.json', JSON.stringify(a, null, 2) + '\n');
+            let c = fs.readFileSync('helm/oracle-mcp-server/Chart.yaml', 'utf8');
+            c = c.replace(/^version: .+/m, 'version: ' + v)
+                 .replace(/^appVersion: .+/m, 'appVersion: \"' + v + '\"');
+            fs.writeFileSync('helm/oracle-mcp-server/Chart.yaml', c);
+          "
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json openapi.json helm/oracle-mcp-server/Chart.yaml
+          git commit -m "chore: bump version to ${{ inputs.tag }}"
+          git push
+
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    needs: [bump-version]
+    if: always() && !failure() && !cancelled()
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run Coverage
+        run: npx vitest run --coverage
+
+      - name: Upload results to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: Tommi2Day/oracle-mcp-server
+
+      - name: Test
+        run: npm test
+
+  docker:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    # bump-version is skipped on tag push; without an explicit status check the
+    # implicit success() would skip this job because of that skipped ancestor.
+    if: always() && !failure() && !cancelled()
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: tommi2day/oracle-mcp-server
+          tags: |
+            # git tag or release → :1.2.3  :1.2  :1  :latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+            # manual dispatch → entered tag
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            # always: :sha-<short>
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Thick-mode variant with Oracle Instant Client → :<version>-thick, :latest-thick, …
+      - name: Extract metadata (thick)
+        id: meta-thick
+        uses: docker/metadata-action@v6
+        with:
+          images: tommi2day/oracle-mcp-server
+          flavor: |
+            suffix=-thick,onlatest=true
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,format=short
+
+      - name: Build and push (thick)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          build-args: |
+            ORACLE_THICK=true
+          tags: ${{ steps.meta-thick.outputs.tags }}
+          labels: ${{ steps.meta-thick.outputs.labels }}
+          cache-from: type=gha,scope=thick
+          cache-to: type=gha,mode=max,scope=thick
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: docker
+    if: always() && !failure() && !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create and push tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ inputs.tag }}"
+          git push origin "${{ inputs.tag }}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes

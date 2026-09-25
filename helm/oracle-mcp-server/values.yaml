@@ -1,0 +1,220 @@
+# ── Image ─────────────────────────────────────────────────────────────────────
+image:
+  repository: tommi2day/oracle-mcp-server
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# ── Replica count ──────────────────────────────────────────────────────────────
+replicaCount: 1
+
+# ── Oracle connection (default / admin connection) ─────────────────────────────
+# The target is chosen by precedence: connectString > tnsAlias > host/port/service.
+oracle:
+  # Free-form connect string: Easy Connect (Plus), full descriptor, TNS alias or
+  # JDBC URL, e.g.
+  #   jdbc:oracle:thin:@//db.example.com:1521/FREEPDB1
+  #   jdbc:oracle:thin:@db.example.com:1521:ORCL          (SID)
+  #   tcps://db.example.com:2484/FREEPDB1
+  #   (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=db)(PORT=2484))(CONNECT_DATA=(SERVICE_NAME=svc)))
+  connectString: ""
+  # Alias from tnsnames.ora in the TNS_ADMIN mount (see tnsAdmin below)
+  tnsAlias: ""
+  # Classic host / port / service_name (or sid)
+  host: "localhost"
+  port: 1521
+  serviceName: "FREEPDB1"
+  sid: ""
+  # tcp (SQL*Net) | tcps (TLS)
+  protocol: tcp
+
+  user: ""
+  password: ""                    # use existingSecret in production!
+  # Password of an encrypted ewallet.pem (thin mode), optional
+  walletPassword: ""
+  # existingSecret: "my-oracle-secret"   # keys: "password" and optionally "walletPassword"
+  # existingSecretKey: "password"
+  # existingSecretWalletPasswordKey: "walletPassword"
+
+  # Wallet directory; default: TNS_ADMIN when it contains ewallet.pem
+  walletLocation: ""
+  # TCPS server certificate checks (thin mode)
+  sslServerDnMatch: ""            # "" = driver default (true) | "true" | "false"
+  sslServerCertDn: ""             # e.g. "CN=db.example.com,O=Example"
+  # PEM bundle with additional trusted CA certificates (path inside the container)
+  tlsCaFile: ""
+
+  # thin (pure JavaScript, default) | thick (needs an image built with ORACLE_THICK=true)
+  driverMode: thin
+  poolMax: 5
+  connectTimeout: 10
+  maxRows: 200
+
+  # Performance analysis tools
+  #   perfTools       – explain_plan, sql_plan, top_sql, session_activity, table_stats
+  #                     (no extra licence; need SELECT_CATALOG_ROLE or SELECT ANY DICTIONARY)
+  #   diagnosticsPack – ash_top, awr_top_events: only enable with an Oracle Diagnostics Pack licence
+  #   tuningPack      – sql_monitor: only enable with an Oracle Tuning Pack licence
+  # Tokens can override the packs per connection (diagnostics_pack / tuning_pack).
+  perfTools: true
+  diagnosticsPack: false
+  tuningPack: false
+
+# ── Oracle client configuration (TNS_ADMIN) ───────────────────────────────────
+# tnsnames.ora, sqlnet.ora and wallet files are mounted read-only at mountPath,
+# combined from an existing Secret, an existing ConfigMap and/or inline files.
+#
+#   kubectl -n mcp create secret generic oracle-tns-admin \
+#     --from-file=tnsnames.ora --from-file=sqlnet.ora \
+#     --from-file=ewallet.pem              # thin mode wallet (PEM)
+#     --from-file=cwallet.sso              # thick mode auto-login wallet
+tnsAdmin:
+  mountPath: /opt/oracle/network/admin
+  existingSecret: ""
+  existingConfigMap: ""
+  # Inline files, stored in the Secret <release>-tns-admin (testing / non-sensitive files)
+  files: {}
+    # tnsnames.ora: |
+    #   PROD_HIGH = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=db.example.com)(PORT=2484))
+    #                (CONNECT_DATA=(SERVICE_NAME=prod_high)))
+
+  # Additional Secrets mounted as separate directories, e.g. per-token wallets or
+  # tnsnames.ora files referenced by a token's "tns_admin" / "wallet_location".
+  # Mount them outside mountPath (the TNS_ADMIN mount is read-only).
+  extraSecrets: []
+    # - name: prod-wallet
+    #   mountPath: /opt/oracle/wallets/prod
+
+# ── Authentication ────────────────────────────────────────────────────────────
+auth:
+  # Bearer token for /mcp endpoint. Empty → auth disabled (local/dev only!)
+  # Generate: openssl rand -hex 32
+  token: ""
+  # existingSecret: "my-auth-secret"   # Secret key must be "token"
+  # existingSecretKey: "token"
+  # Key to encrypt per-token passwords at rest in tokens.json (AES-256-GCM)
+  storeEncryptionKey: ""
+  # storeEncryptionKeySecret: "my-store-key"   # Secret key must be "key"
+
+# ── MCP Server ────────────────────────────────────────────────────────────────
+server:
+  # Name shown in MCP clients (e.g. Claude browser tab) and the Admin UI.
+  # Default: oracle-mcp-server
+  name: ""
+  # Log level: debug | info | warn | error. SQL text of tool calls is only logged at debug.
+  logLevel: info
+  port: 3000
+  transport: http
+
+  # tlsEnabled: false → plain HTTP (default, easy for dev/internal use)
+  # tlsEnabled: true  → HTTPS (requires tls.existingSecret or tls.cert/key)
+  tlsEnabled: false
+
+# ── TLS certificates (HTTPS endpoint of the MCP server) ───────────────────────
+tls:
+  # Option A: existing TLS Secret (type: kubernetes.io/tls)
+  existingSecret: ""
+  # Option B: inline base64-encoded PEM (testing only)
+  cert: ""
+  key: ""
+
+  # Additional SANs for the auto-generated self-signed cert (when /certs is empty).
+  # Example: "DNS:my-host.local,IP:192.168.1.10"
+  san: ""
+
+  # CA to verify MCP client certs (enables mTLS for incoming connections)
+  # Secret must contain "ca.crt"
+  clientCaSecret: ""
+
+# ── Service ───────────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 3000
+
+# ── Ingress ───────────────────────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"   # when tlsEnabled=true
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: oracle-mcp.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: oracle-mcp-ingress-tls
+  #   hosts:
+  #     - oracle-mcp.example.com
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 50m
+    memory: 96Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+
+# ── Autoscaling ───────────────────────────────────────────────────────────────
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+# ── Health probes ─────────────────────────────────────────────────────────────
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+    # scheme defaults to HTTPS when server.tlsEnabled=true (set explicitly to override)
+  initialDelaySeconds: 15
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+    # scheme defaults to HTTPS when server.tlsEnabled=true (set explicitly to override)
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# ── Security ──────────────────────────────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  fsGroup: 1000          # grants uid 1000 access to mounted volumes (data/certs/TNS_ADMIN)
+
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+# ── Token store persistence ───────────────────────────────────────────────────
+persistence:
+  # enabled: false → emptyDir (tokens are lost on pod restart)
+  # enabled: true  → PersistentVolumeClaim
+  enabled: false
+  # existingClaim: ""   # use a pre-existing PVC instead of creating one
+  size: 10Mi
+  storageClass: ""      # "" = cluster default storage class
+  accessMode: ReadWriteOnce
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""
+serviceAccount:
+  create: false
+  name: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []

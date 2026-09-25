@@ -1,0 +1,668 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Oracle MCP Server",
+    "version": "0.1.0",
+    "description": "REST API for the Oracle MCP Server. Exposes a health endpoint, MCP Streamable-HTTP transport, and an admin API for token management. Tokens and their optional per-token database connections are stored in a local JSON file (TOKENS_FILE)."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local / HTTP"
+    },
+    {
+      "url": "https://localhost:3000",
+      "description": "Local / HTTPS"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "AdminToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Value of the AUTH_TOKEN environment variable. Required for /admin/tokens and /mcp."
+      },
+      "FileToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A file token created via POST /admin/tokens. Grants access to /mcp only. Each file token can optionally route to a different Oracle database."
+      }
+    },
+    "schemas": {
+      "TokenConnection": {
+        "type": "object",
+        "nullable": true,
+        "additionalProperties": false,
+        "description": "Per-token Oracle connection. When null the server default connection (ORA_* env vars) is used. The target is chosen by precedence connect_string > tns_alias > host; a token that sets a target never inherits target fields from the default. Credentials fall back to the default only when the token sets no user. password and wallet_password are write-only: responses contain password_set / wallet_password_set instead, and omitting them on PATCH keeps the stored value.",
+        "properties": {
+          "connect_string": {
+            "type": "string",
+            "description": "Easy Connect (Plus), full connect descriptor, TNS alias or JDBC URL (jdbc:oracle:thin:@…). Credentials embedded in a JDBC URL are moved to user/password. ?TNS_ADMIN=<dir> is honoured.",
+            "example": "jdbc:oracle:thin:@//db.example.com:1521/FREEPDB1"
+          },
+          "tns_alias": {
+            "type": "string",
+            "description": "Alias from tnsnames.ora in tns_admin / TNS_ADMIN",
+            "example": "PROD_HIGH"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "default": 1521
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "sid": {
+            "type": "string",
+            "description": "Used instead of service_name"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "tcp",
+              "tcps"
+            ],
+            "default": "tcp"
+          },
+          "user": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "tns_admin": {
+            "type": "string",
+            "description": "Absolute directory (inside the container) with tnsnames.ora / ewallet.pem"
+          },
+          "wallet_location": {
+            "type": "string",
+            "description": "Absolute wallet directory (ewallet.pem). A certificate-only ewallet.pem is added to the trusted CAs."
+          },
+          "wallet_password": {
+            "type": "string",
+            "writeOnly": true,
+            "description": "Password of an encrypted ewallet.pem"
+          },
+          "ssl_server_dn_match": {
+            "type": "boolean",
+            "description": "Check the server certificate host name / DN (TCPS, thin mode)"
+          },
+          "ssl_server_cert_dn": {
+            "type": "string",
+            "example": "CN=db.example.com"
+          },
+          "password_set": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "wallet_password_set": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "diagnostics_pack": {
+            "type": "boolean",
+            "description": "Oracle Diagnostics Pack licensed for this database: enables ash_top / awr_top_events. Default: ORA_DIAGNOSTICS_PACK (false)."
+          },
+          "tuning_pack": {
+            "type": "boolean",
+            "description": "Oracle Tuning Pack licensed for this database: enables sql_monitor. Default: ORA_TUNING_PACK (false)."
+          }
+        }
+      },
+      "Token": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "connection": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenConnection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Custom Oracle connection for this token, or null to use the server default."
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "description": "Returns server status and whether TLS is enabled. No authentication required.",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Server is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "tls": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "examples": {
+                  "default": {
+                    "value": {
+                      "status": "ok",
+                      "tls": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "summary": "MCP Streamable-HTTP endpoint",
+        "description": "MCP protocol transport. Requires a Bearer token (admin or file token). When the token has a custom connection configured, that Oracle database is used for this session; otherwise the server default is used. Multi-step protocol: send `initialize` first, then `notifications/initialized`, then tool calls. Include the `mcp-session-id` header returned from `initialize` in subsequent requests.",
+        "operationId": "mcpRequest",
+        "security": [
+          {
+            "AdminToken": []
+          },
+          {
+            "FileToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "mcp-session-id",
+            "in": "header",
+            "required": false,
+            "description": "Session ID returned by the server after initialize. Include in all follow-up requests.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jsonrpc": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "integer"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object"
+                  }
+                }
+              },
+              "examples": {
+                "initialize": {
+                  "value": {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                      "protocolVersion": "2024-11-05",
+                      "capabilities": {},
+                      "clientInfo": {
+                        "name": "my-client",
+                        "version": "1.0"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC response (may be plain JSON or text/event-stream SSE)",
+            "headers": {
+              "mcp-session-id": {
+                "description": "Session ID — include in subsequent requests",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token"
+          },
+          "403": {
+            "description": "Token not authorized for this endpoint"
+          },
+          "503": {
+            "description": "AUTH_TOKEN not configured on the server"
+          }
+        }
+      }
+    },
+    "/admin/tokens": {
+      "get": {
+        "summary": "List all tokens",
+        "description": "Returns all tokens from the token store. The token_hash field is never included in responses.",
+        "operationId": "listTokens",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Token"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid admin token"
+          },
+          "503": {
+            "description": "AUTH_TOKEN not configured on the server"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a new token",
+        "description": "Creates a new token entry in the token store. The plaintext token is returned once only — only its SHA-256 hash is persisted. An optional `connection` object routes this token to a specific Oracle database; omit it (or set null) to use the server default.",
+        "operationId": "createToken",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "connection": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/TokenConnection"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Optional Oracle connection for this token. Omit or set null to use the server default."
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              },
+              "examples": {
+                "default": {
+                  "value": {
+                    "name": "claude-desktop"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Token created — plaintext value shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Token"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "token": {
+                          "type": "string",
+                          "description": "Plaintext token — store securely, not shown again"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "name is missing or blank, or connection is not a valid object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid admin token"
+          },
+          "503": {
+            "description": "AUTH_TOKEN not configured on the server"
+          }
+        }
+      }
+    },
+    "/admin/tokens/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "patch": {
+        "summary": "Update a token",
+        "description": "Updates one or more of name, active, or connection. At least one field must be provided. Set connection to null to clear a custom connection and fall back to the server default.",
+        "operationId": "updateToken",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "connection": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/TokenConnection"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Set a custom connection, update it, or pass null to clear it."
+                  }
+                }
+              },
+              "examples": {
+                "default": {
+                  "value": {
+                    "name": "new-name"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated token (token_hash is never returned)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Token"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No valid fields provided, or connection is not a valid object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid admin token"
+          },
+          "404": {
+            "description": "Token not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AUTH_TOKEN not configured on the server"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a token",
+        "description": "Permanently removes the token record from the token store. The token is immediately revoked.",
+        "operationId": "deleteToken",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid admin token"
+          },
+          "404": {
+            "description": "Token not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AUTH_TOKEN not configured on the server"
+          }
+        }
+      }
+    },
+    "/info": {
+      "get": {
+        "summary": "Server info",
+        "description": "Server name, version and a password-free description of the default Oracle connection. Requires the admin token (AUTH_TOKEN).",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "db": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "connect_string",
+                            "tns_alias",
+                            "host"
+                          ]
+                        },
+                        "connect_string": {
+                          "type": "string"
+                        },
+                        "host": {
+                          "type": "string"
+                        },
+                        "port": {
+                          "type": "integer"
+                        },
+                        "service_name": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string"
+                        },
+                        "tns_alias": {
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "type": "string",
+                          "enum": [
+                            "tcp",
+                            "tcps"
+                          ]
+                        },
+                        "user": {
+                          "type": "string"
+                        },
+                        "tns_admin": {
+                          "type": "string"
+                        },
+                        "wallet": {
+                          "type": "string"
+                        },
+                        "driver_mode": {
+                          "type": "string",
+                          "enum": [
+                            "thin",
+                            "thick"
+                          ]
+                        }
+                      }
+                    },
+                    "features": {
+                      "type": "object",
+                      "description": "Performance tool features of the default connection",
+                      "properties": {
+                        "perf": {
+                          "type": "boolean"
+                        },
+                        "diagnostics": {
+                          "type": "boolean"
+                        },
+                        "tuning": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    }
+  }
+}

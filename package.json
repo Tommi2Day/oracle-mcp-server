@@ -1,0 +1,47 @@
+{
+  "name": "oracle-mcp-server",
+  "version": "0.1.0",
+  "description": "Oracle Database MCP Server for Claude – stdio & HTTP",
+  "main": "dist/index.js",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "oracle-mcp-server": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "start:http": "TRANSPORT=http node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "version": "node --input-type=commonjs -e \"const fs=require('fs'),v=process.env.npm_new_version;const a=JSON.parse(fs.readFileSync('openapi.json'));a.info.version=v;fs.writeFileSync('openapi.json',JSON.stringify(a,null,2)+'\n');let c=fs.readFileSync('helm/oracle-mcp-server/Chart.yaml','utf8');c=c.replace(/^version: .+/m,'version: '+v).replace(/^appVersion: .+/m,'appVersion: \\\"'+v+'\\\"');fs.writeFileSync('helm/oracle-mcp-server/Chart.yaml',c);\" && git add openapi.json helm/oracle-mcp-server/Chart.yaml",
+    "ci:build": "tsc -p tsconfig.build.json",
+    "ci:test": "vitest run --coverage --coverage.reporter=text-summary",
+    "ci:lint": "eslint .",
+    "ci:typecheck": "tsc --noEmit",
+    "ci:audit": "npm audit --audit-level=high",
+    "audit": "npm audit",
+    "audit:fix": "npm audit fix"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "oracledb": "^7.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "@types/oracledb": "^7.0.3",
+    "@vitest/coverage-v8": "^5.0.2",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
+  }
+}

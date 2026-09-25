@@ -1,0 +1,8 @@
+# Example sqlnet.ora – read by thick mode (ORA_DRIVER_MODE=thick) only.
+# Thin mode ignores sqlnet.ora; use the ORA_* variables / token fields instead.
+NAMES.DIRECTORY_PATH = (TNSNAMES, EZCONNECT)
+
+# Wallet for TCPS (thick mode: cwallet.sso auto-login wallet in this directory)
+WALLET_LOCATION = (SOURCE = (METHOD = FILE)(METHOD_DATA = (DIRECTORY = /opt/oracle/network/admin)))
+SSL_SERVER_DN_MATCH = ON
+SSL_CLIENT_AUTHENTICATION = FALSE

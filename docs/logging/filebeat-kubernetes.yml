@@ -1,0 +1,30 @@
+# Filebeat (DaemonSet): collect oracle-mcp-server pod logs in Kubernetes and ship them to Logstash.
+# See docs/logging.md. Pods of the Helm chart carry the label app.kubernetes.io/name=oracle-mcp-server.
+filebeat.autodiscover:
+  providers:
+    - type: kubernetes
+      node: ${NODE_NAME}
+      templates:
+        - condition:
+            equals:
+              kubernetes.labels.app_kubernetes_io/name: oracle-mcp-server
+          config:
+            - type: filestream
+              id: oracle-mcp-server-${data.kubernetes.container.id}
+              paths:
+                - /var/log/containers/*-${data.kubernetes.container.id}.log
+              parsers:
+                - container:
+                    stream: all
+                - multiline:
+                    type: pattern
+                    pattern: '^\s'
+                    negate: false
+                    match: after
+                    # each line already ends with its own newline
+                    skip_newline: true
+              fields:
+                service: oracle-mcp-server
+
+output.logstash:
+  hosts: ["logstash:5044"]

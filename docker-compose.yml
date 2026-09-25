@@ -1,0 +1,84 @@
+services:
+  oracle-test:
+    image: gvenzl/oracle-free:23-slim-faststart
+    ports:
+      - "${ORA_TEST_PORT:-1521}:1521"
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_ADMIN_PASSWORD:-manager}
+      APP_USER: ${ORA_USER:-mcp}
+      APP_USER_PASSWORD: ${ORA_PASSWORD:-mcp_pw}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks:
+      - mcp-net
+
+  oracle-mcp-server:
+    build: .
+    image: oracle-mcp-server:latest
+    # Fixed hostname: it is written into the SAN of the self-signed cert, which is
+    # persisted in mcp-certs — a random container ID would change on every re-create.
+    hostname: ${MCP_HOSTNAME:-oracle-mcp-server}
+    ports:
+      - "${MCP_PORT:-3000}:3000"
+    depends_on:
+      oracle-test:
+        condition: service_healthy
+    environment:
+      TRANSPORT: http
+      PORT: 3000
+
+      # ── TLS (HTTPS) ───────────────────────────────────────────────────────
+      TLS_ENABLED: "${TLS_ENABLED:-false}"
+      TLS_CERT_FILE: /certs/tls.crt
+      TLS_KEY_FILE:  /certs/tls.key
+      # TLS_CA_FILE: /certs/client-ca.crt
+      # TLS_SAN: "${TLS_SAN:-}"
+
+      # ── Server identity / logging ─────────────────────────────────────────
+      MCP_SERVER_NAME: "${MCP_SERVER_NAME:-oracle-mcp-server}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+
+      # ── Authentication / token store ──────────────────────────────────────
+      AUTH_TOKEN: "${AUTH_TOKEN:-}"
+      TOKENS_FILE: /data/tokens.json
+      STORE_ENCRYPTION_KEY: "${STORE_ENCRYPTION_KEY:-}"
+
+      # ── Oracle (default / admin connection) ───────────────────────────────
+      # Precedence: ORA_CONNECT_STRING > ORA_TNS_ALIAS > ORA_HOST/PORT/SERVICE_NAME
+      ORA_CONNECT_STRING: "${ORA_CONNECT_STRING:-}"
+      ORA_TNS_ALIAS: "${ORA_TNS_ALIAS:-}"
+      ORA_HOST: "${ORA_HOST:-oracle-test}"
+      ORA_PORT: "${ORA_PORT:-1521}"
+      ORA_SERVICE_NAME: "${ORA_SERVICE_NAME:-FREEPDB1}"
+      ORA_PROTOCOL: "${ORA_PROTOCOL:-tcp}"
+      ORA_USER: "${ORA_USER:-mcp}"
+      ORA_PASSWORD: "${ORA_PASSWORD:-mcp_pw}"
+      ORA_DRIVER_MODE: "${ORA_DRIVER_MODE:-thin}"
+      # Performance tools; enable the packs only when licensed
+      ORA_PERF_TOOLS: "${ORA_PERF_TOOLS:-true}"
+      ORA_DIAGNOSTICS_PACK: "${ORA_DIAGNOSTICS_PACK:-false}"
+      ORA_TUNING_PACK: "${ORA_TUNING_PACK:-false}"
+      # TNS_ADMIN is preset in the image to /opt/oracle/network/admin
+
+    volumes:
+      - mcp-data:/data               # persist token store (tokens.json)
+      - mcp-certs:/certs             # persist TLS certs (self-signed cert is generated here on first start)
+      # tnsnames.ora, sqlnet.ora and wallets (read-only)
+      - ${TNS_ADMIN_DIR:-./examples/tns_admin}:/opt/oracle/network/admin:ro
+
+    networks:
+      - mcp-net
+
+    restart: unless-stopped
+
+networks:
+  mcp-net:
+    driver: bridge
+
+volumes:
+  mcp-data:
+  mcp-certs:

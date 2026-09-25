@@ -1,0 +1,12 @@
+apiVersion: v2
+name: oracle-mcp-server
+description: Oracle Database MCP Server for Claude – exposes an Oracle database via the Model Context Protocol over HTTP.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - mcp
+  - oracle
+  - claude
+  - ai
+home: https://github.com/tommi2day/oracle-mcp-server

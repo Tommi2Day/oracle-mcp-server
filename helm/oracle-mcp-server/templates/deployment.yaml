@@ -1,0 +1,284 @@
+{{- $fullname := include "oracle-mcp-server.fullname" . }}
+{{- $hasTnsAdmin := or .Values.tnsAdmin.existingSecret .Values.tnsAdmin.existingConfigMap .Values.tnsAdmin.files }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "oracle-mcp-server.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "oracle-mcp-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "oracle-mcp-server.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: oracle-mcp-server
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+          env:
+            - name: TLS_ENABLED
+              value: {{ .Values.server.tlsEnabled | default "false" | quote }}
+            - name: TRANSPORT
+              value: {{ .Values.server.transport | quote }}
+            - name: PORT
+              value: {{ .Values.server.port | quote }}
+            {{- if .Values.server.name }}
+            - name: MCP_SERVER_NAME
+              value: {{ .Values.server.name | quote }}
+            {{- end }}
+            - name: LOG_LEVEL
+              value: {{ .Values.server.logLevel | default "info" | quote }}
+
+            # ── HTTP TLS ──────────────────────────────────────────────────
+            {{- if .Values.server.tlsEnabled }}
+            - name: TLS_CERT_FILE
+              value: /certs/tls.crt
+            - name: TLS_KEY_FILE
+              value: /certs/tls.key
+            {{- if .Values.tls.clientCaSecret }}
+            - name: TLS_CA_FILE
+              value: /certs-client-ca/ca.crt
+            {{- end }}
+            {{- if .Values.tls.san }}
+            - name: TLS_SAN
+              value: {{ .Values.tls.san | quote }}
+            {{- end }}
+            {{- end }}
+
+            # ── Token store ───────────────────────────────────────────────
+            - name: TOKENS_FILE
+              value: /data/tokens.json
+            {{- if or .Values.auth.storeEncryptionKey .Values.auth.storeEncryptionKeySecret }}
+            - name: STORE_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.storeEncryptionKeySecret | default (printf "%s-store-key" $fullname) }}
+                  key: key
+            {{- end }}
+
+            # ── Authentication ────────────────────────────────────────────
+            {{- if or .Values.auth.token .Values.auth.existingSecret }}
+            - name: AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret | default (printf "%s-auth" $fullname) }}
+                  key: {{ .Values.auth.existingSecretKey | default "token" }}
+            {{- end }}
+
+            # ── Oracle ────────────────────────────────────────────────────
+            - name: TNS_ADMIN
+              value: {{ .Values.tnsAdmin.mountPath | quote }}
+            - name: ORA_DRIVER_MODE
+              value: {{ .Values.oracle.driverMode | default "thin" | quote }}
+            {{- with .Values.oracle.connectString }}
+            - name: ORA_CONNECT_STRING
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oracle.tnsAlias }}
+            - name: ORA_TNS_ALIAS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oracle.host }}
+            - name: ORA_HOST
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oracle.port }}
+            - name: ORA_PORT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oracle.serviceName }}
+            - name: ORA_SERVICE_NAME
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oracle.sid }}
+            - name: ORA_SID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oracle.protocol }}
+            - name: ORA_PROTOCOL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oracle.user }}
+            - name: ORA_USER
+              value: {{ . | quote }}
+            {{- end }}
+            - name: ORA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oracle.existingSecret | default (printf "%s-oracle-credentials" $fullname) }}
+                  key: {{ .Values.oracle.existingSecretKey | default "password" }}
+            - name: ORA_WALLET_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oracle.existingSecret | default (printf "%s-oracle-credentials" $fullname) }}
+                  key: {{ .Values.oracle.existingSecretWalletPasswordKey | default "walletPassword" }}
+                  optional: true
+            {{- with .Values.oracle.walletLocation }}
+            - name: ORA_WALLET_LOCATION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if ne (toString .Values.oracle.sslServerDnMatch) "" }}
+            - name: ORA_SSL_SERVER_DN_MATCH
+              value: {{ .Values.oracle.sslServerDnMatch | quote }}
+            {{- end }}
+            {{- with .Values.oracle.sslServerCertDn }}
+            - name: ORA_SSL_SERVER_CERT_DN
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oracle.tlsCaFile }}
+            - name: ORA_TLS_CA_FILE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: ORA_POOL_MAX
+              value: {{ .Values.oracle.poolMax | default 5 | quote }}
+            - name: ORA_CONNECT_TIMEOUT
+              value: {{ .Values.oracle.connectTimeout | default 10 | quote }}
+            - name: ORA_MAX_ROWS
+              value: {{ .Values.oracle.maxRows | default 200 | quote }}
+            - name: ORA_PERF_TOOLS
+              value: {{ ternary "true" "false" (ne (toString .Values.oracle.perfTools) "false") | quote }}
+            - name: ORA_DIAGNOSTICS_PACK
+              value: {{ .Values.oracle.diagnosticsPack | default false | toString | quote }}
+            - name: ORA_TUNING_PACK
+              value: {{ .Values.oracle.tuningPack | default false | toString | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            {{- if .Values.server.tlsEnabled }}
+            - name: certs
+              mountPath: /certs
+            {{- end }}
+            {{- if $hasTnsAdmin }}
+            - name: tns-admin
+              mountPath: {{ .Values.tnsAdmin.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- range .Values.tnsAdmin.extraSecrets }}
+            - name: tns-extra-{{ .name }}
+              mountPath: {{ .mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.tls.clientCaSecret }}
+            - name: client-ca
+              mountPath: /certs-client-ca
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+
+          {{- /* With TLS the server only speaks HTTPS: default httpGet probes to scheme HTTPS unless set explicitly */}}
+          {{- $livenessProbe := deepCopy .Values.livenessProbe }}
+          {{- $readinessProbe := deepCopy .Values.readinessProbe }}
+          {{- if .Values.server.tlsEnabled }}
+          {{- range $probe := list $livenessProbe $readinessProbe }}
+          {{- if $probe.httpGet }}
+          {{- $_ := set $probe.httpGet "scheme" ($probe.httpGet.scheme | default "HTTPS") }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          livenessProbe:
+            {{- toYaml $livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml $readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default $fullname }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.server.tlsEnabled }}
+        - name: certs
+          {{- if or .Values.tls.existingSecret (and .Values.tls.cert .Values.tls.key) }}
+          secret:
+            secretName: {{ .Values.tls.existingSecret | default (printf "%s-tls" $fullname) }}
+            defaultMode: 0440   # root:<fsGroup>, private key not world-readable
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- if $hasTnsAdmin }}
+        # tnsnames.ora, sqlnet.ora and wallet files combined into one TNS_ADMIN directory
+        - name: tns-admin
+          projected:
+            defaultMode: 0440   # root:<fsGroup>, wallets not world-readable
+            sources:
+              {{- with .Values.tnsAdmin.existingSecret }}
+              - secret:
+                  name: {{ . }}
+              {{- end }}
+              {{- with .Values.tnsAdmin.existingConfigMap }}
+              - configMap:
+                  name: {{ . }}
+              {{- end }}
+              {{- if .Values.tnsAdmin.files }}
+              - secret:
+                  name: {{ $fullname }}-tns-admin
+              {{- end }}
+        {{- end }}
+        {{- range .Values.tnsAdmin.extraSecrets }}
+        - name: tns-extra-{{ .name }}
+          secret:
+            secretName: {{ .name }}
+            defaultMode: 0440
+        {{- end }}
+        {{- if .Values.tls.clientCaSecret }}
+        - name: client-ca
+          secret:
+            secretName: {{ .Values.tls.clientCaSecret }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

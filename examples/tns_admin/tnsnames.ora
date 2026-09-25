@@ -1,0 +1,19 @@
+# Example tnsnames.ora – mounted read-only at $TNS_ADMIN (/opt/oracle/network/admin).
+# Use an alias via ORA_TNS_ALIAS / a token's "tns_alias", e.g. FREE.
+
+# Plain SQL*Net to the docker-compose test database
+FREE =
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = oracle-test)(PORT = 1521))
+    (CONNECT_DATA = (SERVICE_NAME = FREEPDB1))
+  )
+
+# TCPS example: server certificate is verified against the trusted CAs /
+# ewallet.pem in this directory; SSL_SERVER_CERT_DN pins the certificate subject.
+PROD_TLS =
+  (DESCRIPTION =
+    (RETRY_COUNT = 3)
+    (ADDRESS = (PROTOCOL = TCPS)(HOST = db.example.com)(PORT = 2484))
+    (CONNECT_DATA = (SERVICE_NAME = prod.example.com))
+    (SECURITY = (SSL_SERVER_DN_MATCH = ON)(SSL_SERVER_CERT_DN = "CN=db.example.com"))
+  )

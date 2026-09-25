@@ -1,0 +1,5 @@
+* text=auto
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf
+*.ora text eol=lf
+*.pem text eol=lf

@@ -1,0 +1,27 @@
+name: Docker Hub Description
+
+# Pushes DOCKERHUB.md (a compact version of README.md, which exceeds Docker Hub's
+# 25,000 character limit) and the short description to Docker Hub.
+on:
+  push:
+    branches: [main]
+    paths:
+      - DOCKERHUB.md
+      - .github/workflows/dockerhub-description.yml
+  workflow_dispatch:
+
+jobs:
+  update-description:
+    name: Update Docker Hub description
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Requires a Docker Hub access token with Read, Write, Delete scope.
+      - uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: tommi2day/oracle-mcp-server
+          short-description: "Multi-user Oracle MCP server: token auth, per-token DB connections, audit logging, TLS"
+          readme-filepath: ./DOCKERHUB.md

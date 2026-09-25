@@ -1,0 +1,31 @@
+# Filebeat: collect oracle-mcp-server container logs on a Docker host and ship them to Logstash.
+# See docs/logging.md. Run Filebeat with /var/lib/docker/containers and the Docker socket mounted read-only.
+filebeat.autodiscover:
+  providers:
+    - type: docker
+      templates:
+        - condition:
+            contains:
+              docker.container.image: oracle-mcp-server
+          config:
+            - type: filestream
+              id: oracle-mcp-server-${data.docker.container.id}
+              paths:
+                - /var/lib/docker/containers/${data.docker.container.id}/*.log
+              parsers:
+                # Unwrap Docker's json-file format (oracle-mcp-server logs to stderr)
+                - container:
+                    stream: all
+                # Indented lines belong to the previous line: stack traces, startup banner
+                - multiline:
+                    type: pattern
+                    pattern: '^\s'
+                    negate: false
+                    match: after
+                    # each line already ends with its own newline
+                    skip_newline: true
+              fields:
+                service: oracle-mcp-server
+
+output.logstash:
+  hosts: ["logstash:5044"]

@@ -1,0 +1,1296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>__SERVER_NAME__ · Admin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #f1f5f9;
+      --surface:      #ffffff;
+      --border:       #e2e8f0;
+      --border-focus: #6366f1;
+      --text:         #0f172a;
+      --text-muted:   #64748b;
+      --text-faint:   #94a3b8;
+      --primary:      #6366f1;
+      --primary-dk:   #4f46e5;
+      --success:      #10b981;
+      --danger:       #ef4444;
+      --danger-dk:    #dc2626;
+      --radius:       10px;
+      --shadow:       0 1px 3px 0 rgb(0 0 0/.1),0 1px 2px -1px rgb(0 0 0/.1);
+      --shadow-lg:    0 10px 15px -3px rgb(0 0 0/.1),0 4px 6px -4px rgb(0 0 0/.1);
+      --shadow-xl:    0 25px 50px -12px rgb(0 0 0/.25);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ─── Login ─────────────────────────────────────────────────────────── */
+    #login-view {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 1rem;
+    }
+
+    .login-card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-xl);
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 400px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 2rem;
+    }
+
+    .brand-icon {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, var(--primary), var(--primary-dk));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .brand-icon svg { width: 22px; height: 22px; color: #fff; }
+
+    .brand-text h1 { font-size: 1.1rem; font-weight: 700; }
+    .brand-text p  { font-size: 0.75rem; color: var(--text-muted); }
+
+    /* ─── Form elements ─────────────────────────────────────────────────── */
+    .field { margin-bottom: 1rem; }
+
+    label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      margin-bottom: 0.375rem;
+      color: var(--text);
+    }
+
+    input, select {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      border: 1.5px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-family: inherit;
+      color: var(--text);
+      background: var(--surface);
+      transition: border-color .15s, box-shadow .15s;
+      outline: none;
+      appearance: none;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgb(99 102 241/.12);
+    }
+
+    input[type="password"]  { font-family: 'Courier New', monospace; letter-spacing: .1em; }
+    input[type="number"]    { appearance: textfield; }
+
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 0.6rem center;
+      padding-right: 2rem;
+    }
+
+    /* ─── Buttons ───────────────────────────────────────────────────────── */
+    button { cursor: pointer; font-family: inherit; border: none; transition: background .15s, box-shadow .1s, transform .1s, opacity .15s; }
+    button:active:not(:disabled) { transform: scale(.97); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    .btn-primary {
+      width: 100%;
+      padding: 0.625rem;
+      background: var(--primary);
+      color: #fff;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border-radius: 6px;
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-dk); }
+
+    .btn-icon {
+      padding: 0.375rem;
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: 6px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .btn-icon:hover { background: var(--bg); color: var(--text); }
+    .btn-icon svg  { width: 15px; height: 15px; }
+    .btn-icon.danger:hover { background: #fef2f2; color: var(--danger); }
+
+    .btn-new {
+      display: inline-flex; align-items: center; gap: 0.375rem;
+      padding: 0.5rem 0.875rem;
+      background: var(--primary); color: #fff;
+      font-size: 0.8125rem; font-weight: 600;
+      border-radius: 6px;
+    }
+    .btn-new:hover { background: var(--primary-dk); }
+    .btn-new svg { width: 14px; height: 14px; }
+
+    .btn-logout {
+      padding: 0.35rem 0.75rem;
+      background: transparent; color: #94a3b8;
+      border: 1.5px solid #334155;
+      border-radius: 6px; font-size: 0.8rem;
+    }
+    .btn-logout:hover { background: #1e293b; color: #fff; }
+
+    .btn-refresh {
+      padding: 0.35rem 0.65rem;
+      background: transparent; color: #94a3b8;
+      border: 1.5px solid #334155;
+      border-radius: 6px; font-size: 0.8rem;
+      display: inline-flex; align-items: center; gap: 0.3rem;
+    }
+    .btn-refresh:hover { background: #1e293b; color: #fff; }
+    .btn-refresh svg { width: 13px; height: 13px; }
+
+    /* Modal buttons — applied dynamically via JS, suppress false "unused" warnings */
+    /* noinspection CssUnusedSymbol */
+    .btn-cancel {
+      padding: 0.5rem 1rem;
+      background: var(--bg); color: var(--text);
+      border: 1.5px solid var(--border);
+      border-radius: 6px; font-size: 0.875rem; font-weight: 500;
+      min-width: 80px;
+    }
+    /* noinspection CssUnusedSymbol */
+    .btn-cancel:hover { background: #e2e8f0; }
+
+    /* noinspection CssUnusedSymbol */
+    .btn-submit {
+      padding: 0.5rem 1rem;
+      background: var(--primary); color: #fff;
+      border-radius: 6px; font-size: 0.875rem; font-weight: 600;
+      min-width: 80px;
+    }
+    /* noinspection CssUnusedSymbol */
+    .btn-submit:hover:not(:disabled) { background: var(--primary-dk); }
+
+    /* noinspection CssUnusedSymbol */
+    .btn-deactivate {
+      padding: 0.5rem 1rem;
+      background: var(--danger); color: #fff;
+      border-radius: 6px; font-size: 0.875rem; font-weight: 600;
+      min-width: 80px;
+    }
+    /* noinspection CssUnusedSymbol */
+    .btn-deactivate:hover:not(:disabled) { background: var(--danger-dk); }
+
+    /* ─── Alerts ────────────────────────────────────────────────────────── */
+    .alert {
+      border-radius: 6px;
+      padding: 0.625rem 0.875rem;
+      margin-bottom: 1rem;
+      font-size: 0.8125rem;
+      display: none;
+    }
+    .alert-error   { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+    .alert-success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+
+    /* ─── Header ────────────────────────────────────────────────────────── */
+    #main-view { display: flex; flex-direction: column; min-height: 100vh; }
+
+    header {
+      background: #0f172a;
+      color: #fff;
+      height: 56px;
+      padding: 0 1.5rem;
+      display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 10;
+      box-shadow: 0 1px 0 0 #1e293b, 0 2px 8px rgb(0 0 0/.3);
+    }
+
+    .header-brand {
+      display: flex; align-items: center; gap: 0.625rem;
+      font-size: 0.9375rem; font-weight: 700;
+    }
+
+    .header-brand-icon {
+      width: 28px; height: 28px;
+      background: linear-gradient(135deg, #818cf8, #6366f1);
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .header-brand-icon svg { width: 16px; height: 16px; color: #fff; }
+
+    .header-right { display: flex; align-items: center; gap: 0.75rem; }
+
+    .server-pill {
+      font-size: 0.725rem; color: #94a3b8;
+      background: #1e293b;
+      padding: 0.25rem 0.625rem;
+      border-radius: 100px;
+      max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    /* ─── Main layout ───────────────────────────────────────────────────── */
+    main {
+      padding: 1.75rem 1.5rem;
+      max-width: 1100px; margin: 0 auto; width: 100%;
+    }
+
+    .toolbar {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 1.25rem;
+      gap: 1rem;
+    }
+
+    .toolbar-left { display: flex; align-items: baseline; gap: 0.5rem; }
+    .toolbar-left h2 { font-size: 1.1rem; font-weight: 700; }
+    .token-count { font-size: 0.8rem; color: var(--text-muted); }
+
+    .toolbar-right { display: flex; align-items: center; gap: 0.5rem; }
+
+    /* ─── Card / Table ──────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .table-wrap { overflow-x: auto; }
+
+    table { width: 100%; border-collapse: collapse; }
+
+    thead { background: #f8fafc; }
+
+    th {
+      padding: 0.6rem 1rem;
+      text-align: left;
+      font-size: 0.7rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .06em;
+      color: var(--text-muted);
+      border-bottom: 1.5px solid var(--border);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid #f1f5f9;
+      vertical-align: middle;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tbody tr:hover td { background: #fafbff; }
+
+    .col-name     { min-width: 140px; }
+    .col-status   { width: 90px; }
+    .col-conn     { min-width: 150px; }
+    .col-date     { width: 150px; }
+    .col-actions  { width: 80px; }
+
+    .token-name { font-weight: 600; font-size: 0.875rem; }
+    .token-id   { font-size: 0.7rem; color: var(--text-faint); margin-top: 1px; }
+
+    /* ─── Status badge ──────────────────────────────────────────────────── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 100px; font-size: 0.7rem; font-weight: 700;
+    }
+    .badge::before {
+      content: ''; display: block;
+      width: 6px; height: 6px; border-radius: 50%;
+    }
+    /* noinspection CssUnusedSymbol */
+    .badge-on  { background: #f0fdf4; color: #166534; }
+    /* noinspection CssUnusedSymbol */
+    .badge-on::before  { background: var(--success); }
+    /* noinspection CssUnusedSymbol */
+    .badge-off { background: #f8fafc; color: var(--text-muted); }
+    /* noinspection CssUnusedSymbol */
+    .badge-off::before { background: var(--text-faint); }
+
+    /* ─── Connection cell ───────────────────────────────────────────────── */
+    .conn-label {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      font-size: 0.8rem; white-space: nowrap; max-width: 200px;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .conn-label svg { width: 13px; height: 13px; flex-shrink: 0; }
+    .conn-default { color: var(--text-faint); }
+    .conn-custom  { color: #6366f1; font-weight: 500; }
+
+    /* ─── Date cell ─────────────────────────────────────────────────────── */
+    .date-text { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
+    .date-never { font-size: 0.8rem; color: var(--text-faint); font-style: italic; }
+
+    /* ─── Actions ───────────────────────────────────────────────────────── */
+    .actions { display: flex; gap: 0.125rem; }
+
+    /* ─── Empty / Loading ───────────────────────────────────────────────── */
+    .state-row td { text-align: center; padding: 3rem 1rem; }
+
+    .empty-state { color: var(--text-muted); }
+    .empty-state svg { width: 36px; height: 36px; margin-bottom: 0.75rem; opacity: .35; display: block; margin-inline: auto; }
+    .empty-state p { font-size: 0.875rem; }
+
+    .loading-state { display: flex; align-items: center; justify-content: center; gap: 0.625rem; color: var(--text-muted); font-size: 0.875rem; }
+    .spinner { width: 18px; height: 18px; border: 2px solid #e2e8f0; border-top-color: var(--primary); border-radius: 50%; animation: spin .65s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ─── Modal ─────────────────────────────────────────────────────────── */
+    #modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgb(0 0 0/.5);
+      backdrop-filter: blur(3px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1rem; z-index: 100;
+      animation: fadeIn .15s;
+    }
+    @keyframes fadeIn { from { opacity: 0; } }
+
+    .modal {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-xl);
+      width: 100%; max-width: 480px;
+      max-height: 92vh;
+      display: flex; flex-direction: column;
+      animation: slideUp .2s ease-out;
+      border: 1px solid var(--border);
+    }
+    @keyframes slideUp { from { transform: translateY(14px); opacity: 0; } }
+
+    .modal-header {
+      padding: 1.25rem 1.5rem 0;
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .modal-title { font-size: 1rem; font-weight: 700; }
+
+    .modal-body { padding: 1.25rem 1.5rem; overflow-y: auto; }
+    .modal-body .field:last-child { margin-bottom: 0; }
+
+    .modal-footer {
+      padding: 0 1.5rem 1.25rem;
+      display: flex; justify-content: flex-end; gap: 0.625rem;
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      padding-top: 1rem;
+      margin-top: 0.25rem;
+    }
+
+    /* ─── Connection section (inside modal) ─────────────────────────────── */
+    .conn-header-left { display: flex; flex-direction: column; }
+    .conn-default-info { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; padding-left: 18px; }
+
+    .conn-section {
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 0.25rem;
+    }
+
+    .conn-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.75rem 1rem;
+      background: #f8fafc;
+      cursor: pointer; user-select: none;
+    }
+
+    .conn-header-label {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.8125rem; font-weight: 500; color: var(--text);
+      cursor: pointer; margin: 0;
+    }
+    .conn-header-label svg { width: 14px; height: 14px; color: var(--text-muted); }
+
+    /* Toggle switch */
+    .toggle {
+      position: relative; width: 36px; height: 20px;
+      cursor: pointer; flex-shrink: 0;
+      display: inline-block;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: #cbd5e1; border-radius: 100px;
+      transition: background .2s;
+    }
+    .toggle input:checked ~ .toggle-track { background: var(--primary); }
+    .toggle-thumb {
+      position: absolute; top: 2px; left: 2px;
+      width: 16px; height: 16px;
+      background: #fff; border-radius: 50%;
+      box-shadow: 0 1px 3px rgb(0 0 0/.2);
+      transition: transform .2s;
+    }
+    .toggle input:checked ~ .toggle-track ~ .toggle-thumb { transform: translateX(16px); }
+
+    .conn-fields {
+      padding: 1rem;
+      border-top: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+    .conn-fields .field { margin-bottom: 0; }
+    .conn-fields .field.full { grid-column: 1 / -1; }
+
+    /* ─── Token reveal ──────────────────────────────────────────────────── */
+    .token-reveal {
+      background: #f8fafc;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 0.875rem;
+      margin-bottom: 1rem;
+    }
+    .token-reveal p { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+    .reveal-hint { font-size: .75rem; color: var(--text-muted); line-height: 1.6; }
+    /* long bearer tokens have no break opportunities — let them wrap inside the modal */
+    .reveal-hint code { font-size: .72rem; overflow-wrap: anywhere; }
+
+    .token-value {
+      display: flex; align-items: flex-start; gap: 0.5rem;
+    }
+    .token-value code {
+      flex: 1;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 0.78rem;
+      word-break: break-all;
+      color: var(--text);
+    }
+    .copy-btn {
+      flex-shrink: 0;
+      background: transparent; border: none;
+      color: var(--text-muted); cursor: pointer;
+      padding: 0.1rem; border-radius: 4px;
+      transition: color .15s;
+    }
+    .copy-btn:hover { color: var(--primary); }
+    .copy-btn svg { width: 14px; height: 14px; display: block; }
+
+    /* ─── Delete warning ────────────────────────────────────────────────── */
+    .delete-warning {
+      background: #fef2f2;
+      border: 1.5px solid #fecaca;
+      border-radius: 8px;
+      padding: 0.875rem;
+      font-size: 0.8125rem;
+      color: #991b1b;
+      margin-bottom: 0.5rem;
+    }
+
+    .divider { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
+
+    /* ─── Info panel ───────────────────────────────────────────────────── */
+    .info-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 0.75rem 1rem;
+      margin-bottom: 1.25rem;
+      display: flex; align-items: center;
+      flex-wrap: wrap; gap: 0;
+    }
+
+    .info-panel-title {
+      font-size: 0.7rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .06em;
+      color: var(--text-muted);
+      padding-right: 0.875rem; flex-shrink: 0;
+    }
+
+    .info-item {
+      display: flex; flex-direction: column;
+      padding: 0 0.875rem;
+      border-left: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .info-label {
+      font-size: 0.65rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .04em;
+      color: var(--text-faint); line-height: 1.5;
+    }
+
+    .info-value {
+      font-size: 0.8125rem; font-weight: 500;
+      color: var(--text); line-height: 1.5;
+    }
+
+    /* ─── Responsive ────────────────────────────────────────────────────── */
+    @media (max-width: 700px) {
+      .hide-sm { display: none; }
+      .conn-fields { grid-template-columns: 1fr; }
+      .server-pill { display: none; }
+      main { padding: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ══════════════════════ LOGIN VIEW ══════════════════════ -->
+<div id="login-view">
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+          <ellipse cx="12" cy="5" rx="9" ry="3"/>
+          <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
+          <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>__SERVER_NAME__</h1>
+        <p>Token Administration</p>
+      </div>
+    </div>
+
+    <div id="login-error" class="alert alert-error"></div>
+
+    <div class="field">
+      <label for="inp-url">Server URL</label>
+      <input id="inp-url" type="url" placeholder="http://localhost:3000" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="field">
+      <label for="inp-token">Admin Token <span style="font-weight:400;color:var(--text-muted)">(leave empty if auth is disabled)</span></label>
+      <input id="inp-token" type="password" placeholder="AUTH_TOKEN value — optional if auth disabled" autocomplete="current-password">
+    </div>
+
+    <button class="btn-primary" id="login-btn" onclick="login()">Sign in</button>
+  </div>
+</div>
+
+<!-- ══════════════════════ MAIN VIEW ══════════════════════ -->
+<div id="main-view" style="display:none">
+  <header>
+    <div class="header-brand">
+      <div class="header-brand-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+          <ellipse cx="12" cy="5" rx="9" ry="3"/>
+          <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
+          <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
+        </svg>
+      </div>
+      __SERVER_NAME__
+    </div>
+    <div class="header-right">
+      <span class="server-pill" id="server-pill"></span>
+      <button class="btn-refresh" onclick="loadTokens()" title="Refresh token list">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="23 4 23 10 17 10"/>
+          <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+        </svg>
+        Refresh
+      </button>
+      <button class="btn-logout" onclick="logout()">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="info-section"></div>
+
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <h2>Tokens</h2>
+        <span class="token-count" id="token-count"></span>
+      </div>
+      <div class="toolbar-right">
+        <button class="btn-new" onclick="openCreateModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          New Token
+        </button>
+      </div>
+    </div>
+
+    <div id="main-error" class="alert alert-error"></div>
+
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-name">Name</th>
+              <th class="col-status">Status</th>
+              <th class="col-conn hide-sm">Connection</th>
+              <th class="col-date hide-sm">Created</th>
+              <th class="col-date hide-sm">Last used</th>
+              <th class="col-actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="token-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ══════════════════════ MODAL ══════════════════════ -->
+<div id="modal-backdrop" style="display:none" onclick="onBackdropClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title"></span>
+      <button class="btn-icon" onclick="closeModal()" title="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const state = { serverUrl: '', token: '', tokens: [], serverInfo: null };
+
+// ── Session storage ───────────────────────────────────────────────────────────
+function saveSession() {
+  sessionStorage.setItem('pms_url',   state.serverUrl);
+  sessionStorage.setItem('pms_token', state.token);
+}
+function clearSession() {
+  sessionStorage.removeItem('pms_url');
+  sessionStorage.removeItem('pms_token');
+}
+
+// ── API client ────────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const res = await fetch(state.serverUrl + path, {
+    method,
+    headers: {
+      ...(state.token ? { 'Authorization': 'Bearer ' + state.token } : {}),
+      'Content-Type':  'application/json',
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+async function login() {
+  const urlInput   = document.getElementById('inp-url');
+  const tokenInput = document.getElementById('inp-token');
+  const errEl      = document.getElementById('login-error');
+  const btn        = document.getElementById('login-btn');
+
+  errEl.style.display = 'none';
+  const url   = urlInput.value.trim().replace(/\/$/, '');
+  const token = tokenInput.value.trim();
+
+  if (!url) { flashInput(urlInput, 'Enter the server URL'); return; }
+
+  btn.disabled    = true;
+  btn.textContent = 'Signing in…';
+  state.serverUrl = url;
+  state.token     = token;
+
+  try {
+    const data = await api('GET', '/admin/tokens');
+    state.tokens = data.tokens || [];
+    saveSession();
+    showMain();
+  } catch (e) {
+    state.serverUrl = '';
+    state.token     = '';
+    const msg = e.message.includes('401') ? 'Invalid admin token.' :
+                e.message.includes('fetch') ? 'Cannot reach server. Check the URL.' : e.message;
+    showAlert(errEl, msg);
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = 'Sign in';
+  }
+}
+
+function logout() {
+  clearSession();
+  state.serverUrl = '';
+  state.token     = '';
+  state.tokens    = [];
+  document.getElementById('main-view').style.display = 'none';
+  document.getElementById('login-view').style.display = 'flex';
+  document.getElementById('inp-token').value = '';
+  document.getElementById('login-error').style.display = 'none';
+}
+
+// ── Views ─────────────────────────────────────────────────────────────────────
+function showMain() {
+  document.getElementById('login-view').style.display = 'none';
+  document.getElementById('main-view').style.display  = 'flex';
+  document.getElementById('server-pill').textContent  = state.serverUrl;
+  loadServerInfo();
+  renderTokens();
+}
+
+async function loadServerInfo() {
+  try {
+    state.serverInfo = await api('GET', '/info');
+    renderServerInfo();
+  } catch (e) {}
+}
+
+function renderServerInfo() {
+  const el = document.getElementById('info-section');
+  if (!el) return;
+  const info = state.serverInfo;
+  if (!info) { el.innerHTML = ''; return; }
+  const db = info.db || {};
+  const item = (label, value) => `
+      <div class="info-item">
+        <span class="info-label">${label}</span>
+        <span class="info-value">${x(value)}</span>
+      </div>`;
+  el.innerHTML = `
+    <div class="info-panel">
+      <span class="info-panel-title">Server Info</span>
+      ${item('Name', info.name || '—')}
+      ${item('Version', info.version || '—')}
+      ${item('Perf tools', info.features ? [info.features.perf ? 'on' : 'off',
+        'Diagnostics ' + (info.features.diagnostics ? 'on' : 'off'),
+        'Tuning ' + (info.features.tuning ? 'on' : 'off')].join(' · ') : '—')}
+      ${item('Target', db.tns_alias ? 'TNS alias ' + db.tns_alias : (db.connect_string || '—'))}
+      ${item('User', db.user || '—')}
+      ${item('Protocol', db.protocol ? db.protocol.toUpperCase() : 'see tnsnames.ora')}
+      ${item('Driver', db.driver_mode || 'thin')}
+    </div>`;
+}
+
+// ── Token list ────────────────────────────────────────────────────────────────
+async function loadTokens() {
+  setTbodyLoading();
+  try {
+    const data = await api('GET', '/admin/tokens');
+    state.tokens = data.tokens || [];
+    document.getElementById('main-error').style.display = 'none';
+  } catch (e) {
+    showAlert(document.getElementById('main-error'), 'Failed to load tokens: ' + e.message);
+  }
+  renderTokens();
+}
+
+function setTbodyLoading() {
+  document.getElementById('token-tbody').innerHTML = `
+    <tr class="state-row">
+      <td colspan="6"><div class="loading-state"><div class="spinner"></div>Loading…</div></td>
+    </tr>`;
+}
+
+function renderTokens() {
+  const tbody = document.getElementById('token-tbody');
+  const list  = state.tokens;
+  document.getElementById('token-count').textContent = list.length ? `(${list.length})` : '';
+
+  if (!list.length) {
+    tbody.innerHTML = `
+      <tr class="state-row">
+        <td colspan="6">
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="3" width="20" height="14" rx="2"/>
+              <path d="M8 21h8M12 17v4"/>
+            </svg>
+            <p>No tokens yet — create the first one.</p>
+          </div>
+        </td>
+      </tr>`;
+    return;
+  }
+
+  tbody.innerHTML = list.map(t => `
+    <tr id="row-${t.id}">
+      <td class="col-name">
+        <div class="token-name">${x(t.name)}</div>
+        <div class="token-id">#${t.id}</div>
+      </td>
+      <td class="col-status">
+        <span class="badge ${t.active ? 'badge-on' : 'badge-off'}">${t.active ? 'Active' : 'Inactive'}</span>
+      </td>
+      <td class="col-conn hide-sm">${renderConn(t.connection)}</td>
+      <td class="col-date hide-sm"><span class="date-text">${fmtDate(t.created_at)}</span></td>
+      <td class="col-date hide-sm">${t.last_used_at
+        ? `<span class="date-text">${fmtDate(t.last_used_at)}</span>`
+        : `<span class="date-never">Never</span>`}</td>
+      <td class="col-actions">
+        <div class="actions">
+          <button class="btn-icon" onclick="openEditModal(${t.id})" title="Edit name / connection">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </button>
+          <button class="btn-icon danger" onclick="openDeleteModal(${t.id})" title="Delete token">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6l-1 14H6L5 6"/>
+              <path d="M10 11v6M14 11v6M9 6V4h6v2"/>
+            </svg>
+          </button>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+function connLabel(conn) {
+  if (conn.tns_alias) return conn.tns_alias;
+  if (conn.connect_string) {
+    const cs = conn.connect_string.replace(/^jdbc:oracle:[a-z0-9]+:@?/i, '');
+    return cs.length > 32 ? cs.slice(0, 30) + '…' : cs;
+  }
+  if (conn.host) return [conn.host, conn.service_name || conn.sid].filter(Boolean).join(' / ');
+  return conn.user ? 'default · ' + conn.user : 'Custom';
+}
+
+function renderConn(conn) {
+  if (!conn) return `
+    <span class="conn-label conn-default">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
+      </svg>
+      Server default
+    </span>`;
+  const lbl = connLabel(conn);
+  const full = conn.connect_string || conn.tns_alias || `${conn.protocol === 'tcps' ? 'tcps://' : ''}${conn.host || ''}:${conn.port || 1521}/${conn.service_name || conn.sid || ''}`;
+  return `
+    <span class="conn-label conn-custom" title="${x(full)}${conn.user ? ' · ' + x(conn.user) : ''}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <ellipse cx="12" cy="5" rx="9" ry="3"/>
+        <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
+        <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
+      </svg>
+      ${x(lbl)}
+    </span>`;
+}
+
+// ── Create ────────────────────────────────────────────────────────────────────
+function openCreateModal() {
+  showModal('New Token', buildForm(null), [
+    { label: 'Cancel',       cls: 'btn-cancel',  fn: 'closeModal()' },
+    { label: 'Create Token', cls: 'btn-submit',  fn: 'submitCreate()', id: 'modal-primary' },
+  ]);
+}
+
+async function submitCreate() {
+  const name = document.getElementById('f-name').value.trim();
+  if (!name) { flashInput(document.getElementById('f-name'), 'Name is required'); return; }
+
+  const conn = readConn();
+  const btn  = document.getElementById('modal-primary');
+  btn.disabled = true; btn.textContent = 'Creating…';
+
+  try {
+    const created = await api('POST', '/admin/tokens', { name, connection: conn });
+    state.tokens.unshift({ ...created });
+    renderTokens();
+    showTokenReveal(created);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Create Token';
+    showAlert(document.getElementById('modal-alert'), e.message);
+  }
+}
+
+function showTokenReveal(created) {
+  const body = `
+    <div class="alert alert-success" style="display:block">
+      Token <strong>${x(created.name)}</strong> created. Copy the value below — it will not be shown again.
+    </div>
+    <div class="token-reveal">
+      <p>Bearer token value</p>
+      <div class="token-value">
+        <code id="reveal-code">${x(created.token)}</code>
+        <button class="copy-btn" onclick="copyToken()" title="Copy to clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <p class="reveal-hint">
+      Add to <code>.mcp.json</code>:<br>
+      <code>"Authorization": "Bearer ${x(created.token)}"</code>
+    </p>`;
+  showModal('Token Created', body, [
+    { label: 'Done', cls: 'btn-submit', fn: 'closeModal()' },
+  ]);
+}
+
+function copyToken() {
+  const text = document.getElementById('reveal-code').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    btn.style.color = 'var(--success)';
+    setTimeout(() => { btn.style.color = ''; }, 1800);
+  }).catch(() => {});
+}
+
+// ── Edit ──────────────────────────────────────────────────────────────────────
+function openEditModal(id) {
+  const t = state.tokens.find(t => t.id === id);
+  if (!t) return;
+  showModal(`Edit Token`, buildForm(t), [
+    { label: 'Cancel', cls: 'btn-cancel', fn: 'closeModal()' },
+    { label: 'Save',   cls: 'btn-submit', fn: `submitEdit(${id})`, id: 'modal-primary' },
+  ]);
+}
+
+async function submitEdit(id) {
+  const name = document.getElementById('f-name').value.trim();
+  if (!name) { flashInput(document.getElementById('f-name'), 'Name is required'); return; }
+
+  const conn   = readConn();
+  const active = document.getElementById('f-active').checked;
+  const btn       = document.getElementById('modal-primary');
+  btn.disabled = true; btn.textContent = 'Saving…';
+
+  try {
+    const updated = await api('PATCH', `/admin/tokens/${id}`, { name, active, connection: conn });
+    const idx = state.tokens.findIndex(t => t.id === id);
+    if (idx >= 0) Object.assign(state.tokens[idx], updated);
+    renderTokens();
+    closeModal();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Save';
+    showAlert(document.getElementById('modal-alert'), e.message);
+  }
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+function openDeleteModal(id) {
+  const t = state.tokens.find(t => t.id === id);
+  if (!t) return;
+  const body = `
+    <div class="delete-warning">
+      Deleting <strong>${x(t.name)}</strong> will permanently remove this token and immediately revoke access for any client using it.
+    </div>
+    <p style="font-size:.8125rem;color:var(--text-muted)">This action cannot be undone.</p>`;
+  showModal('Delete Token', body, [
+    { label: 'Cancel', cls: 'btn-cancel',     fn: 'closeModal()' },
+    { label: 'Delete', cls: 'btn-deactivate', fn: `submitDelete(${id})`, id: 'modal-primary' },
+  ]);
+}
+
+async function submitDelete(id) {
+  const btn = document.getElementById('modal-primary');
+  btn.disabled = true; btn.textContent = 'Deleting…';
+  try {
+    await api('DELETE', `/admin/tokens/${id}`);
+    state.tokens = state.tokens.filter(t => t.id !== id);
+    renderTokens();
+    closeModal();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Delete';
+    showAlert(document.getElementById('modal-alert'), e.message);
+  }
+}
+
+// ── Token form builder ────────────────────────────────────────────────────────
+function buildForm(t) {
+  const c        = (t && t.connection) || {};
+  const hasConn  = !!(t && t.connection);
+  const isEdit   = !!t;
+  const db       = state.serverInfo && state.serverInfo.db;
+  const defInfo  = db ? `${db.tns_alias ? 'TNS alias ' + db.tns_alias : (db.connect_string || '?')}  ·  user: ${db.user || '?'}` : '';
+  const ctype    = c.connect_string ? 'connect_string' : c.tns_alias ? 'tns_alias' : 'host';
+  const pwHint   = c.password_set ? 'unchanged' : '••••••••';
+  const wpwHint  = c.wallet_password_set ? 'unchanged' : 'only for encrypted ewallet.pem';
+  const dnMatch  = c.ssl_server_dn_match === undefined ? '' : String(c.ssl_server_dn_match);
+  return `
+    <div id="modal-alert" class="alert alert-error"></div>
+
+    <div class="field">
+      <label for="f-name">Name</label>
+      <input id="f-name" type="text" value="${x(t ? t.name : '')}" placeholder="e.g. claude-desktop" autocomplete="off">
+    </div>
+
+    ${isEdit ? `
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+        <label class="toggle" style="margin:0">
+          <input type="checkbox" id="f-active" ${t.active ? 'checked' : ''}>
+          <span class="toggle-track"></span><span class="toggle-thumb"></span>
+        </label>
+        Active
+      </label>
+    </div>` : ''}
+
+    <hr class="divider">
+
+    <div class="conn-section">
+      <div class="conn-header" onclick="toggleConnFields()">
+        <div class="conn-header-left">
+          <label class="conn-header-label" for="f-use-default">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <ellipse cx="12" cy="5" rx="9" ry="3"/>
+              <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
+              <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
+            </svg>
+            Use default connection
+          </label>
+          <div class="conn-default-info" id="conn-default-info" style="display:${!hasConn && defInfo ? 'block' : 'none'}">${x(defInfo)}</div>
+        </div>
+        <label class="toggle" style="pointer-events:none">
+          <input type="checkbox" id="f-use-default" ${!hasConn ? 'checked' : ''}>
+          <span class="toggle-track"></span><span class="toggle-thumb"></span>
+        </label>
+      </div>
+      <div id="conn-fields" class="conn-fields" style="display:${hasConn ? 'grid' : 'none'}">
+        <div class="field full">
+          <label for="f-ctype">Connection type</label>
+          <select id="f-ctype" onchange="switchConnType()">
+            <option value="host" ${ctype === 'host' ? 'selected' : ''}>Host / port / service</option>
+            <option value="tns_alias" ${ctype === 'tns_alias' ? 'selected' : ''}>TNS alias (tnsnames.ora)</option>
+            <option value="connect_string" ${ctype === 'connect_string' ? 'selected' : ''}>Connect string / JDBC URL</option>
+          </select>
+        </div>
+        <div class="field ct ct-host">
+          <label for="f-host">Host</label>
+          <input id="f-host" type="text" value="${x(c.host || '')}" placeholder="db.example.com">
+        </div>
+        <div class="field ct ct-host">
+          <label for="f-port">Port</label>
+          <input id="f-port" type="number" value="${c.port || 1521}" min="1" max="65535">
+        </div>
+        <div class="field ct ct-host">
+          <label for="f-service">Service name</label>
+          <input id="f-service" type="text" value="${x(c.service_name || '')}" placeholder="FREEPDB1">
+        </div>
+        <div class="field ct ct-host">
+          <label for="f-sid">SID (instead of service)</label>
+          <input id="f-sid" type="text" value="${x(c.sid || '')}" placeholder="">
+        </div>
+        <div class="field full ct ct-host">
+          <label for="f-protocol">Protocol</label>
+          <select id="f-protocol">
+            <option value="tcp" ${(c.protocol || 'tcp') === 'tcp' ? 'selected' : ''}>TCP (SQL*Net)</option>
+            <option value="tcps" ${c.protocol === 'tcps' ? 'selected' : ''}>TCPS (TLS)</option>
+          </select>
+        </div>
+        <div class="field full ct ct-tns_alias">
+          <label for="f-alias">TNS alias</label>
+          <input id="f-alias" type="text" value="${x(c.tns_alias || '')}" placeholder="PROD_HIGH">
+        </div>
+        <div class="field full ct ct-connect_string">
+          <label for="f-cs">Connect string</label>
+          <input id="f-cs" type="text" value="${x(c.connect_string || '')}"
+                 placeholder="jdbc:oracle:thin:@//host:1521/svc · tcps://host:2484/svc · (DESCRIPTION=…)">
+        </div>
+        <div class="field">
+          <label for="f-user">User</label>
+          <input id="f-user" type="text" value="${x(c.user || '')}" placeholder="(server default)">
+        </div>
+        <div class="field">
+          <label for="f-password">Password</label>
+          <input id="f-password" type="password" value="" placeholder="${pwHint}" autocomplete="new-password">
+        </div>
+        <div class="field full">
+          <label for="f-tnsadmin">TNS_ADMIN directory (optional)</label>
+          <input id="f-tnsadmin" type="text" value="${x(c.tns_admin || '')}" placeholder="/opt/oracle/network/admin/prod">
+        </div>
+        <div class="field">
+          <label for="f-wallet">Wallet directory</label>
+          <input id="f-wallet" type="text" value="${x(c.wallet_location || '')}" placeholder="(TNS_ADMIN)">
+        </div>
+        <div class="field">
+          <label for="f-walletpw">Wallet password</label>
+          <input id="f-walletpw" type="password" value="" placeholder="${wpwHint}" autocomplete="new-password">
+        </div>
+        <div class="field">
+          <label for="f-dnmatch">Server DN match</label>
+          <select id="f-dnmatch">
+            <option value="" ${dnMatch === '' ? 'selected' : ''}>Default</option>
+            <option value="true" ${dnMatch === 'true' ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${dnMatch === 'false' ? 'selected' : ''}>Disabled</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-certdn">Server cert DN</label>
+          <input id="f-certdn" type="text" value="${x(c.ssl_server_cert_dn || '')}" placeholder="CN=db.example.com">
+        </div>
+        <div class="field">
+          <label for="f-diag">Diagnostics Pack (ASH/AWR tools)</label>
+          <select id="f-diag">${packOptions(c.diagnostics_pack)}</select>
+        </div>
+        <div class="field">
+          <label for="f-tuning">Tuning Pack (SQL Monitor)</label>
+          <select id="f-tuning">${packOptions(c.tuning_pack)}</select>
+        </div>
+      </div>
+    </div>`;
+}
+
+/** Options for a licence switch: server default, licensed, not licensed. */
+function packOptions(value) {
+  const v = value === undefined || value === null || value === '' ? '' : String(value);
+  return [
+    ['', 'Server default'],
+    ['true', 'Licensed – enable tools'],
+    ['false', 'Not licensed – disable tools'],
+  ].map(([val, label]) => `<option value="${val}" ${v === val ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+function switchConnType() {
+  const t = document.getElementById('f-ctype').value;
+  document.querySelectorAll('#conn-fields .ct').forEach(el => {
+    el.style.display = el.classList.contains('ct-' + t) ? '' : 'none';
+  });
+}
+
+function toggleConnFields() {
+  const cb = document.getElementById('f-use-default');
+  cb.checked = !cb.checked;
+  const useDefault = cb.checked;
+  document.getElementById('conn-fields').style.display = useDefault ? 'none' : 'grid';
+  if (!useDefault) switchConnType();
+  const info = document.getElementById('conn-default-info');
+  if (info) info.style.display = useDefault && info.textContent ? 'block' : 'none';
+}
+
+function readConn() {
+  if (document.getElementById('f-use-default')?.checked) return null;
+  const v = id => document.getElementById(id).value.trim();
+  const type = v('f-ctype');
+  const conn = {};
+  if (type === 'host') {
+    Object.assign(conn, { host: v('f-host'), port: parseInt(v('f-port')) || 1521, service_name: v('f-service'),
+                          sid: v('f-sid'), protocol: v('f-protocol') || 'tcp' });
+  } else if (type === 'tns_alias') {
+    conn.tns_alias = v('f-alias');
+  } else {
+    conn.connect_string = v('f-cs');
+  }
+  conn.user            = v('f-user');
+  conn.tns_admin       = v('f-tnsadmin');
+  conn.wallet_location = v('f-wallet');
+  conn.ssl_server_cert_dn = v('f-certdn');
+  const dn = v('f-dnmatch');
+  if (dn) conn.ssl_server_dn_match = dn === 'true';
+  const diag = v('f-diag');
+  if (diag) conn.diagnostics_pack = diag === 'true';
+  const tuning = v('f-tuning');
+  if (tuning) conn.tuning_pack = tuning === 'true';
+  // Empty password fields are omitted: the server keeps the stored secret on update
+  const pw = document.getElementById('f-password').value;
+  if (pw) conn.password = pw;
+  const wpw = document.getElementById('f-walletpw').value;
+  if (wpw) conn.wallet_password = wpw;
+  for (const k of Object.keys(conn)) if (conn[k] === '') delete conn[k];
+  return conn;
+}
+
+// ── Modal helpers ─────────────────────────────────────────────────────────────
+function showModal(title, body, buttons) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').innerHTML    = body;
+  if (document.getElementById('f-ctype')) switchConnType();
+  document.getElementById('modal-footer').innerHTML  = buttons.map(b =>
+    `<button class="${b.cls}" ${b.id ? `id="${b.id}"` : ''} onclick="${b.fn}">${b.label}</button>`
+  ).join('');
+  document.getElementById('modal-backdrop').style.display = 'flex';
+  requestAnimationFrame(() => {
+    const inp = document.querySelector('#modal-body input:not([type=checkbox])');
+    if (inp) inp.focus();
+  });
+}
+
+function closeModal() {
+  document.getElementById('modal-backdrop').style.display = 'none';
+}
+
+function onBackdropClick(e) {
+  if (e.target === document.getElementById('modal-backdrop')) closeModal();
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+// HTML-escape user data before inserting into innerHTML
+function x(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function showAlert(el, msg) {
+  el.textContent   = msg;
+  el.style.display = 'block';
+}
+
+function flashInput(el, placeholder) {
+  el.style.borderColor = 'var(--danger)';
+  el.style.boxShadow   = '0 0 0 3px rgb(239 68 68/.15)';
+  el.placeholder       = placeholder;
+  el.focus();
+  setTimeout(() => { el.style.borderColor = ''; el.style.boxShadow = ''; }, 2000);
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' })
+    + ' ' + d.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' });
+}
+
+// ── Keyboard ──────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Enter' && document.getElementById('login-view').style.display !== 'none') login();
+});
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+(function init() {
+  // Pre-fill URL from current origin so /admin works out of the box
+  const origin = window.location.origin;
+  document.getElementById('inp-url').value =
+    (origin && origin !== 'null') ? origin : 'http://localhost:3000';
+
+  // Try to restore session
+  const savedUrl   = sessionStorage.getItem('pms_url');
+  const savedToken = sessionStorage.getItem('pms_token');
+  if (savedUrl && savedToken) {
+    state.serverUrl = savedUrl;
+    state.token     = savedToken;
+    document.getElementById('inp-url').value = savedUrl;
+    showMain();
+    setTbodyLoading();
+    api('GET', '/admin/tokens')
+      .then(data => { state.tokens = data.tokens || []; renderTokens(); })
+      .catch(() => {
+        clearSession();
+        state.serverUrl = '';
+        state.token     = '';
+        document.getElementById('main-view').style.display = 'none';
+        document.getElementById('login-view').style.display = 'flex';
+        document.getElementById('inp-url').value = savedUrl;
+        showAlert(document.getElementById('login-error'), 'Session expired. Please sign in again.');
+      });
+  }
+}());
+</script>
+</body>
+</html>
