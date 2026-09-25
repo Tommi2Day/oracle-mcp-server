@@ -1,5 +1,5 @@
 # ── Build stage: compile TypeScript ───────────────────────────────────────────
-FROM node:24-slim AS build
+FROM node:25-slim AS build
 WORKDIR /build
 COPY package.json package-lock.json tsconfig.json tsconfig.build.json ./
 RUN npm ci --ignore-scripts
@@ -8,7 +8,7 @@ RUN npm run build
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 # Debian (glibc) base so the optional Oracle Instant Client (thick mode) can run.
-FROM node:24-slim
+FROM node:25-slim
 
 # ORACLE_THICK=true installs Oracle Instant Client (basic lite) for thick mode
 # (ORA_DRIVER_MODE=thick): needed for sqlnet.ora settings, cwallet.sso auto-login
