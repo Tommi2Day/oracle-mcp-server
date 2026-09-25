@@ -29,7 +29,10 @@ docker build --build-arg ORACLE_THICK=true -t oracle-mcp-server:thick .   # Inst
 - **`src/index.ts`** — MCP tools, pool cache, HTTP routing, startup. `isMain` guard keeps imports side-effect free.
 - **`src/perf.ts`** — performance tools (`PERF_TOOLS` with a `feature` each: `perf`, `diagnostics`, `tuning`).
   `perfToolList(features)` filters ListTools, `runPerfTool` re-checks the feature (`assertPerfToolEnabled`), sets
-  `MODULE=oracle-mcp-server-perf` (excluded in `top_sql`) and adds a privilege hint to ORA-00942/01031.
+  `ACTION=mcp-perf:<tool>` (excluded in `top_sql`) and adds a privilege hint to ORA-00942/01031.
+- **Session tags** — `withConnection` calls `tagSession` on every pool checkout: MODULE = `MCP_SERVER_NAME`,
+  ACTION = tool, CLIENT_IDENTIFIER = token name, CLIENT_INFO = server/version/IP (`sessionTags()` in `oracle.ts`,
+  byte limits 48/32/64/64); `program` pool attribute = `programName(MCP_SERVER_NAME)` (thin mode).
   Features come from `perfFeatures(mergedConnection)` (`oracle.ts`): `ORA_PERF_TOOLS` global, packs from
   `diagnostics_pack` / `tuning_pack` (token) falling back to `ORA_DIAGNOSTICS_PACK` / `ORA_TUNING_PACK`; default off.
   Timestamps in ASH/AWR are server-local `TIMESTAMP`s — compare with `CAST(SYSTIMESTAMP AS TIMESTAMP)`, never

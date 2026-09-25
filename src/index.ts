@@ -33,7 +33,8 @@ import {
 import {
   connectionFromEnv, mergeConnection, resolvePoolAttributes, describeConnection,
   getDriverMode, normalizeSql, resolveConnectString, trustedCaFile, firstKeyword, toIdentifier, perfFeatures,
-  type OraConnection, type PerfFeatures,
+  sessionTags, programName,
+  type OraConnection, type PerfFeatures, type SessionContext,
 } from "./oracle.js";
 import { formatCell } from "./format.js";
 import { PERF_TOOL_NAMES, perfToolList, runPerfTool, assertPerfToolEnabled } from "./perf.js";
@@ -104,6 +105,7 @@ function poolOptions() {
     mode:           getDriverMode(),
     poolMax:        parseInt(process.env.ORA_POOL_MAX || "5", 10) || 5,
     connectTimeout: parseInt(process.env.ORA_CONNECT_TIMEOUT || "10", 10) || 10,
+    program:        programName(mcpServerName),
   };
 }
 
@@ -171,11 +173,22 @@ export async function closeAllPools(): Promise<void> {
 type PoolProvider = () => Promise<oracledb.Pool>;
 type Binds = oracledb.BindParameters;
 
-async function withConnection<T>(getDbPool: PoolProvider, fn: (conn: oracledb.Connection) => Promise<T>): Promise<T> {
+/** Sets MODULE / ACTION / CLIENT_IDENTIFIER / CLIENT_INFO of a pooled session (sent with the
+ *  next round trip, no extra call). Set on every checkout because tokens with the same
+ *  effective connection share a pool. */
+export function tagSession(conn: oracledb.Connection, ctx: SessionContext): void {
+  const tags = sessionTags(ctx);
+  conn.module = tags.module;
+  conn.action = tags.action;
+  conn.clientId = tags.clientId;
+  conn.clientInfo = tags.clientInfo;
+}
+
+async function withConnection<T>(getDbPool: PoolProvider, ctx: SessionContext,
+  fn: (conn: oracledb.Connection) => Promise<T>): Promise<T> {
   const pool = await getDbPool();
   const conn = await pool.getConnection();
-  // shown in V$SESSION.MODULE; sent with the next round trip
-  conn.module = "oracle-mcp-server";
+  tagSession(conn, ctx);
   try {
     return await fn(conn);
   } finally {
@@ -298,11 +311,12 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name } = request.params;
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+    const session: SessionContext = { server: mcpServerName, version, token: tokenName, ip: clientIp, tool: name };
     log("info", "MCP", `token="${tokenName}" action="${name}" ip="${clientIp}"${formatToolParams(args)}`);
     try {
       switch (name) {
         case "test_connection":
-          return await withConnection(getDbPool, async (conn) => {
+          return await withConnection(getDbPool, session, async (conn) => {
             const res = await conn.execute<Record<string, string>>(
               `SELECT SYS_CONTEXT('USERENV','DB_NAME') AS db_name,
                       SYS_CONTEXT('USERENV','SERVICE_NAME') AS service_name,
@@ -333,7 +347,7 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
           });
 
         case "list_schemas":
-          return await withConnection(getDbPool, async (conn) => {
+          return await withConnection(getDbPool, session, async (conn) => {
             let rows: string[];
             try {
               const res = await conn.execute<[string]>(
@@ -350,7 +364,7 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
           });
 
         case "list_tables":
-          return await withConnection(getDbPool, async (conn) => {
+          return await withConnection(getDbPool, session, async (conn) => {
             const res = await conn.execute<[string, string, string]>(
               `SELECT o.object_name, o.object_type, NVL(:owner, SYS_CONTEXT('USERENV','CURRENT_SCHEMA')) AS owner
                FROM all_objects o
@@ -371,7 +385,7 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
           });
 
         case "describe_table":
-          return await withConnection(getDbPool, async (conn) => {
+          return await withConnection(getDbPool, session, async (conn) => {
             if (!args.table) throw new Error('"table" is required');
             const res = await conn.execute<Record<string, unknown>>(
               `SELECT c.owner, c.column_name, c.data_type, c.data_length, c.char_length, c.char_used,
@@ -401,7 +415,7 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
           });
 
         case "query":
-          return await withConnection(getDbPool, async (conn) => {
+          return await withConnection(getDbPool, session, async (conn) => {
             const sql = normalizeSql(String(args.sql ?? ""));
             if (!isReadOnlyStatement(sql)) {
               throw new Error("The query tool only accepts SELECT or WITH statements — use the execute tool for DML, DDL or PL/SQL.");
@@ -438,7 +452,7 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
           });
 
         case "execute":
-          return await withConnection(getDbPool, async (conn) => {
+          return await withConnection(getDbPool, session, async (conn) => {
             const sql = normalizeSql(String(args.sql ?? ""));
             const plsql = /^\s*(BEGIN|DECLARE)\b/i.test(sql);
             if (plsql) await conn.execute("BEGIN DBMS_OUTPUT.ENABLE(NULL); END;");
@@ -458,7 +472,7 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
         default:
           if (PERF_TOOL_NAMES.has(name)) {
             assertPerfToolEnabled(name, features);
-            return text(await withConnection(getDbPool, conn => runPerfTool(name, args, conn, features)));
+            return text(await withConnection(getDbPool, session, conn => runPerfTool(name, args, conn, features)));
           }
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -679,7 +693,7 @@ async function main(): Promise<void> {
       http.createServer(handleRequest).listen(PORT, () => banner("http"));
     }
   } else {
-    const server    = createMcpServer();
+    const server    = createMcpServer(() => getPool(null), "stdio", "local");
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error(`Oracle MCP Server running on stdio – ${dbLine} – ${perfLine}`);

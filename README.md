@@ -1,5 +1,7 @@
 # oracle-mcp-server
 
+[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/tommi2day/oracle-mcp-server)](https://github.com/Tommi2Day/oracle-mcp-server/releases)
+
 [Model Context Protocol](https://modelcontextprotocol.io) server that gives Claude (and other MCP clients)
 access to **Oracle Database** — the Oracle sibling of
 [tommi2day/pg-mcp-server](https://github.com/tommi2day/pg-mcp-server).
@@ -26,6 +28,7 @@ access to **Oracle Database** — the Oracle sibling of
 - [Oracle client files (TNS_ADMIN)](#oracle-client-files-tns_admin)
 - [Thin vs. thick mode](#thin-vs-thick-mode)
 - [Configuration reference](#configuration-reference)
+- [Session identification](#session-identification)
 - [Tokens & per-token connections](#tokens--per-token-connections)
 - [Kubernetes / Helm](#kubernetes--helm)
 - [Claude configuration](#claude-configuration)
@@ -87,8 +90,8 @@ reachable where the pack is granted. Errors caused by missing privileges include
 **Full documentation of the tools, privileges and the grant script: [docs/performance.md](docs/performance.md).** In a PDB, `awr_top_events` uses the PDB's own snapshots (`AWR_PDB_AUTOFLUSH_ENABLED=TRUE`) and
 otherwise falls back to CDB root snapshots where their statistics are visible.
 
-Internal statements run with `MODULE=oracle-mcp-server-perf` and are excluded from `top_sql`; all other pooled
-sessions show `MODULE=oracle-mcp-server` in `V$SESSION`.
+Internal statements of the performance tools run with `ACTION=mcp-perf:<tool>` and are excluded from `top_sql`
+(see [Session identification](#session-identification)).
 
 ---
 
@@ -281,6 +284,37 @@ Outside the image set `ORA_CLIENT_LIB_DIR` to the Instant Client directory for t
 | `ORA_PERF_TOOLS` | `true` | Performance analysis tools (`false` hides all of them) |
 | `ORA_DIAGNOSTICS_PACK` | `false` | Diagnostics Pack licensed → `ash_top`, `awr_top_events` |
 | `ORA_TUNING_PACK` | `false` | Tuning Pack licensed → `sql_monitor` |
+
+---
+
+## Session identification
+
+Every database session used by the server identifies the MCP server and the token, so DBAs can attribute
+activity in `V$SESSION`, ASH, AWR, SQL Monitor and the audit trail:
+
+| `V$SESSION` column | Value | Example |
+|--------------------|-------|---------|
+| `PROGRAM` | `MCP_SERVER_NAME` (thin mode; characters other than `A-Z a-z 0-9 . _ -` become `_`) | `Prod_DB__EU_` |
+| `MODULE` | `MCP_SERVER_NAME` | `Prod DB (EU)` |
+| `ACTION` | tool name; `mcp-perf:<tool>` while a performance tool runs its own statements | `query`, `mcp-perf:top_sql` |
+| `CLIENT_IDENTIFIER` | token name (`admin` for `AUTH_TOKEN`, `anonymous` without auth, `stdio` in stdio mode) | `claude-desktop` |
+| `CLIENT_INFO` | server name, version and MCP client IP | `Prod DB (EU) 0.1.0 ip=10.0.0.7` |
+
+The attributes are set on every checkout from the pool (tokens with the same effective connection share
+sessions) and travel with the next database call — no extra round trip. Values are cut to Oracle's limits
+(MODULE 48, ACTION 32, CLIENT_IDENTIFIER / CLIENT_INFO 64 bytes). An idle pooled session keeps the values of its
+last use.
+
+```sql
+SELECT sid, program, module, action, client_identifier, client_info
+FROM   v$session WHERE module = 'Prod DB (EU)';
+-- ASH (Diagnostics Pack): DB time per token
+SELECT client_id, COUNT(*) FROM v$active_session_history
+WHERE  module = 'Prod DB (EU)' GROUP BY client_id;
+```
+
+`CLIENT_IDENTIFIER` also appears in unified auditing (`UNIFIED_AUDIT_TRAIL.CLIENT_IDENTIFIER`) and can drive
+`DBMS_MONITOR.CLIENT_ID_TRACE_ENABLE` to trace everything a single token does.
 
 ---
 

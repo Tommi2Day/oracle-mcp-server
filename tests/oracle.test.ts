@@ -3,6 +3,7 @@ import {
   parseConnectString, buildHostConnectString, connectionFromEnv, mergeConnection,
   resolvePoolAttributes, describeConnection, redactConnectString, normalizeSql, isPlsql,
   usesTcps, extractJdbcCredentials, getDriverMode, trustedCaFile, inspectWallet,
+  sessionTags, truncateBytes, programName,
 } from "../src/oracle.js";
 
 describe("parseConnectString", () => {
@@ -252,5 +253,39 @@ describe("inspectWallet", () => {
     fs.appendFileSync(path.join(dir, "ewallet.pem"), "-----BEGIN ENCRYPTED PRIVATE KEY-----\nx\n");
     expect(inspectWallet(dir)).toBe("key");
     fs.rmSync(dir, { recursive: true });
+  });
+});
+
+describe("session tags", () => {
+  const ctx = { server: "prod-db-mcp", version: "0.1.0", token: "claude-desktop", ip: "10.0.0.7", tool: "query" };
+
+  it("maps server, tool, token and client info", () => {
+    expect(sessionTags(ctx)).toEqual({
+      module: "prod-db-mcp",
+      action: "query",
+      clientId: "claude-desktop",
+      clientInfo: "prod-db-mcp 0.1.0 ip=10.0.0.7",
+    });
+  });
+
+  it("respects Oracle's byte limits without splitting characters", () => {
+    const t = sessionTags({ ...ctx, server: "x".repeat(60), tool: "y".repeat(40), token: "ä".repeat(40) });
+    expect(t.module).toHaveLength(48);
+    expect(t.action).toHaveLength(32);
+    expect(Buffer.byteLength(t.clientId)).toBe(64);   // 32 two-byte characters
+    expect(t.clientId).toBe("ä".repeat(32));
+    expect(Buffer.byteLength(t.clientInfo)).toBeLessThanOrEqual(64);
+    expect(truncateBytes("abc", 10)).toBe("abc");
+  });
+
+  it("programName keeps only characters the driver accepts", () => {
+    expect(programName("oracle-mcp-server")).toBe("oracle-mcp-server");
+    expect(programName("Prod DB (EU)")).toBe("Prod_DB__EU_");
+    expect(programName("")).toBe("oracle-mcp-server");
+  });
+
+  it("passes program to thin pool attributes only", () => {
+    expect(resolvePoolAttributes({ host: "h" }, { program: "p", inspectWallet: () => "none" }).program).toBe("p");
+    expect(resolvePoolAttributes({ host: "h" }, { mode: "thick", program: "p" })).not.toHaveProperty("program");
   });
 });

@@ -47,6 +47,8 @@ export interface OraPoolAttributes {
   poolIncrement: number;
   connectTimeout: number;
   poolPingInterval: number;
+  /** V$SESSION.PROGRAM (thin mode only) */
+  program?: string;
 }
 
 export interface ParsedConnectString {
@@ -312,6 +314,8 @@ export interface ResolveOptions {
   poolMax?: number;
   connectTimeout?: number;
   inspectWallet?: (dir: string) => WalletKind;
+  /** V$SESSION.PROGRAM, thin mode only (see programName()) */
+  program?: string;
 }
 
 interface WalletResolution {
@@ -375,6 +379,7 @@ export function resolvePoolAttributes(c: OraConnection, opts: ResolveOptions = {
     if (dnMatch !== undefined) attrs.sslServerDNMatch = dnMatch;
     const certDn = nonEmpty(c.ssl_server_cert_dn);
     if (certDn) attrs.sslServerCertDN = certDn;
+    if (opts.program) attrs.program = opts.program;
   }
   return stripUndefined(attrs);
 }
@@ -444,4 +449,48 @@ export function toIdentifier(name: string | undefined | null): string | null {
   if (!s) return null;
   if (s.length >= 2 && s.startsWith("\"") && s.endsWith("\"")) return s.slice(1, -1);
   return s.toUpperCase();
+}
+
+// ── Session identification (V$SESSION) ─────────────────────────────────────────
+/** Who is using a pooled connection: MCP server, token and tool. */
+export interface SessionContext {
+  server: string;
+  version: string;
+  token: string;
+  ip: string;
+  tool: string;
+}
+
+/** End-to-end tracing attributes shown in V$SESSION, ASH and the audit trail. */
+export interface SessionTags {
+  module: string;      // V$SESSION.MODULE            – MCP server name
+  action: string;      // V$SESSION.ACTION            – tool name
+  clientId: string;    // V$SESSION.CLIENT_IDENTIFIER – token name
+  clientInfo: string;  // V$SESSION.CLIENT_INFO       – server, version, client IP
+}
+
+/** Cuts a string to at most maxBytes UTF-8 bytes without splitting a character. */
+export function truncateBytes(s: string, maxBytes: number): string {
+  if (Buffer.byteLength(s, "utf8") <= maxBytes) return s;
+  let out = "";
+  for (const ch of s) {
+    if (Buffer.byteLength(out + ch, "utf8") > maxBytes) break;
+    out += ch;
+  }
+  return out;
+}
+
+/** Tags within Oracle's limits (MODULE 48, ACTION 32, CLIENT_IDENTIFIER / CLIENT_INFO 64 bytes). */
+export function sessionTags(ctx: SessionContext): SessionTags {
+  return {
+    module:     truncateBytes(ctx.server, 48),
+    action:     truncateBytes(ctx.tool, 32),
+    clientId:   truncateBytes(ctx.token, 64),
+    clientInfo: truncateBytes(`${ctx.server} ${ctx.version} ip=${ctx.ip}`, 64),
+  };
+}
+
+/** V$SESSION.PROGRAM value (thin mode): the server name reduced to characters the driver accepts. */
+export function programName(server: string): string {
+  return server.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 48) || "oracle-mcp-server";
 }

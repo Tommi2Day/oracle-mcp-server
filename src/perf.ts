@@ -19,9 +19,9 @@ import { firstKeyword, normalizeSql, toIdentifier, type PerfFeatures } from "./o
 
 /** Marker in every internal statement; top_sql filters these out. */
 export const SQL_TAG = "/* oracle-mcp-server */";
-/** MODULE of sessions while a performance tool runs; also excludes recursive SQL
- *  (e.g. DBMS_XPLAN internals) from top_sql. */
-export const PERF_MODULE = "oracle-mcp-server-perf";
+/** ACTION prefix while a performance tool runs; recursive SQL (e.g. DBMS_XPLAN internals)
+ *  inherits it, so top_sql can exclude the tools' own statements. MODULE stays the server name. */
+export const PERF_ACTION_PREFIX = "mcp-perf:";
 
 type Feature = keyof PerfFeatures;
 
@@ -275,7 +275,7 @@ async function topSql(conn: oracledb.Connection, args: Args): Promise<string> {
               SUBSTR(REGEXP_REPLACE(sql_text, '\\s+', ' '), 1, 200) AS sql_text
        FROM v$sqlarea
        WHERE sql_text NOT LIKE '%oracle-mcp-server%'
-         AND NVL(module, '-') <> 'oracle-mcp-server-perf'
+         AND NVL(action, '-') NOT LIKE 'mcp-perf:%'
          AND (:inc_sys = 1 OR parsing_schema_name <> 'SYS')
          AND (:schema_name IS NULL OR parsing_schema_name = :schema_name)
          AND (:pattern IS NULL OR UPPER(sql_text) LIKE '%' || UPPER(:pattern) || '%')
@@ -599,8 +599,8 @@ export function assertPerfToolEnabled(name: string, features: PerfFeatures): voi
 /** Runs a performance tool; adds a privilege hint to ORA-00942 / ORA-01031 errors. */
 export async function runPerfTool(name: string, args: Args, conn: oracledb.Connection, features: PerfFeatures): Promise<string> {
   assertPerfToolEnabled(name, features);
-  conn.module = PERF_MODULE;
-  conn.action = name;
+  // overrides the ACTION set at checkout; the next checkout sets all tags again
+  conn.action = PERF_ACTION_PREFIX + name;
   try {
     return await HANDLERS[name](conn, args);
   } catch (err) {
@@ -609,8 +609,5 @@ export async function runPerfTool(name: string, args: Args, conn: oracledb.Conne
       throw new Error(msg + PRIV_HINT, { cause: err });
     }
     throw err;
-  } finally {
-    conn.module = "oracle-mcp-server";
-    conn.action = "";
   }
 }

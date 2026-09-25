@@ -284,7 +284,8 @@ The cursor must still be in the shared pool.
 | `limit` | 10 | max. 100 |
 
 Values are cumulative since the cursor was loaded (`V$SQLAREA`). Statements issued by the performance tools
-themselves (`MODULE=oracle-mcp-server-perf`) are excluded.
+themselves (`ACTION` starting with `mcp-perf:`) are excluded. `MODULE`, `ACTION` and `CLIENT_IDENTIFIER` of the
+listed statements tell which MCP server, tool and token issued them (see the README, *Session identification*).
 
 ```text
 SQL_ID          PLAN_HASH  SCHEMA  EXECS  ELAPSED_S  CPU_S  MS/EXEC     GETS  READS  ROWS  LAST_ACTIVE          SQL_TEXT

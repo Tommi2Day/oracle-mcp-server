@@ -53,7 +53,7 @@ describe("explain_plan", () => {
     const out = await run("explain_plan", { sql: "select * from emp where id = :1;" });
     expect(sqlOf(0)).toBe("BEGIN EXECUTE IMMEDIATE :stmt; END;");
     expect(bindsOf(0).stmt).toMatch(/^EXPLAIN PLAN SET STATEMENT_ID = 'MCP[0-9A-F]{24}' FOR select \* from emp where id = :1$/);
-    expect(conn.module).toBe("oracle-mcp-server"); // reset after the tool
+    expect(conn.action).toBe("mcp-perf:explain_plan"); // tool statements are tagged via ACTION
     expect(conn.execute.mock.calls.length).toBe(2);
     expect(sqlOf(1)).toContain("DBMS_XPLAN.DISPLAY('PLAN_TABLE', :id, :fmt)");
     expect(bindsOf(1)).toMatchObject({ fmt: "TYPICAL" });
@@ -96,7 +96,7 @@ describe("top_sql", () => {
     conn.execute.mockResolvedValueOnce({ rows: [{ SQL_ID: "a", EXECUTIONS: 3, ELAPSED_S: 1.5, SQL_TEXT: "select 1" }] });
     const out = await run("top_sql", { order_by: "buffer_gets", schema: "hr", sql_text_like: "emp", limit: 500 });
     expect(sqlOf(0).startsWith(SQL_TAG)).toBe(true);
-    expect(sqlOf(0)).toContain("NVL(module, '-') <> 'oracle-mcp-server-perf'");
+    expect(sqlOf(0)).toContain("NVL(action, '-') NOT LIKE 'mcp-perf:%'");
     expect(sqlOf(0)).toContain("ORDER BY buffer_gets DESC");
     expect(bindsOf(0)).toEqual({ inc_sys: 0, schema_name: "HR", pattern: "emp", n: 100 });
     expect(out).toContain("Top 1 SQL by buffer_gets");

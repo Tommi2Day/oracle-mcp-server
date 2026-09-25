@@ -96,7 +96,7 @@ describe("getPool", () => {
     expect(p1).toBe(p2);
     expect(createPool).toHaveBeenCalledTimes(1);
     expect(createPool).toHaveBeenCalledWith(expect.objectContaining({
-      user: "app", password: "pw", connectString: "dbhost:1521/FREEPDB1", poolMin: 0,
+      user: "app", password: "pw", connectString: "dbhost:1521/FREEPDB1", poolMin: 0, program: "oracle-mcp-server",
     }));
   });
 
@@ -153,6 +153,23 @@ describe("MCP tools", () => {
     } finally {
       delete process.env.ORA_DIAGNOSTICS_PACK;
     }
+  });
+
+  it("tags the pooled session with server, token, tool and client IP", async () => {
+    mockConn.execute.mockResolvedValueOnce({ rows: [["APP"]] });
+    await callTool("list_schemas");
+    expect(mockConn).toMatchObject({
+      module: "oracle-mcp-server",
+      action: "list_schemas",
+      clientId: "tester",
+      clientInfo: expect.stringMatching(/^oracle-mcp-server \d+\.\d+\.\d+ ip=1\.2\.3\.4$/),
+    });
+  });
+
+  it("tags performance tool statements with the mcp-perf: action", async () => {
+    mockConn.execute.mockResolvedValueOnce({ rows: [{ LINE: "plan" }] });
+    await callTool("sql_plan", { sql_id: "abcdefghij123" });
+    expect(mockConn).toMatchObject({ clientId: "tester", action: "mcp-perf:sql_plan" });
   });
 
   it("dispatches performance tools", async () => {

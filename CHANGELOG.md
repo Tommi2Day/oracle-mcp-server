@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - MIT license.
+- Session identification: `PROGRAM` and `MODULE` = `MCP_SERVER_NAME`, `ACTION` = tool name,
+  `CLIENT_IDENTIFIER` = token name, `CLIENT_INFO` = server, version and client IP.
+
+### Changed
+
+- Performance tool statements are marked with `ACTION=mcp-perf:<tool>` instead of `MODULE=oracle-mcp-server-perf`.
 
 ## [0.1.0] - 2026-09-25
 
