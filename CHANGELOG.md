@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- README: screenshots of the admin UI and of the log output (`docs/images/`); `DOCKERHUB.md` shows the token list
+  and the log output.
+
+### Fixed
+
+- Admin UI: password field placeholders (e.g. *Wallet password*) use the normal font instead of the spaced
+  monospace font of the entered value; shorter *Diagnostics Pack* label keeps the form rows aligned.
+
 ## [0.1.0] - 2026-09-26
 
 ### Added

@@ -51,6 +51,20 @@ Performance analysis: `explain_plan`, `sql_plan`, `top_sql`, `session_activity`,
 `ORA_DIAGNOSTICS_PACK=true` also `ash_top`, `awr_top_events`, with `ORA_TUNING_PACK=true` `sql_monitor`.
 Licensed tools are **off by default** and can be switched per token.
 
+## Admin UI
+
+Manage tokens and their database connections (host/service, TNS alias, connect string, TCPS) at `/admin`
+([more screenshots](https://github.com/Tommi2Day/oracle-mcp-server#admin-ui)):
+
+![Admin UI: token list](https://raw.githubusercontent.com/Tommi2Day/oracle-mcp-server/main/docs/images/admin-tokens.png)
+
+## Audit logging
+
+All activity is written to stderr (`docker logs oracle-mcp-server`): tool calls, session start/stop, rejected logins
+and admin actions. SQL text is only logged at `LOG_LEVEL=debug`.
+
+![Log output at LOG_LEVEL=info](https://raw.githubusercontent.com/Tommi2Day/oracle-mcp-server/main/docs/images/logs-info.png)
+
 ## Main environment variables
 
 `AUTH_TOKEN`, `STORE_ENCRYPTION_KEY`, `ORA_CONNECT_STRING`, `ORA_TNS_ALIAS`, `ORA_HOST`, `ORA_PORT`,

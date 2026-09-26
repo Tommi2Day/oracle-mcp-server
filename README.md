@@ -18,8 +18,8 @@ access to **Oracle Database** — the Oracle sibling of
   mount (`TNS_ADMIN`) or Kubernetes Secrets/ConfigMaps
 - **Driver:** [node-oracledb](https://node-oracledb.readthedocs.io) *thin* mode (pure JavaScript, default)
   or *thick* mode (Oracle Instant Client, optional image variant)
-- **Multi-user:** bearer-token auth, per-token database connections, admin UI + REST API,
-  secrets encrypted at rest, structured audit log
+- **Multi-user:** bearer-token auth, per-token database connections, admin UI ([screenshots](#admin-ui)) + REST API,
+  secrets encrypted at rest, structured audit log ([example](#logging))
 
 ---
 
@@ -34,6 +34,7 @@ access to **Oracle Database** — the Oracle sibling of
 - [Configuration reference](#configuration-reference)
 - [Session identification](#session-identification)
 - [Tokens & per-token connections](#tokens--per-token-connections)
+- [Logging](#logging)
 - [Kubernetes / Helm](#kubernetes--helm)
 - [Claude configuration](#claude-configuration)
 - [Development](#development)
@@ -349,6 +350,48 @@ Merge rules with the default connection:
 
 Secrets are write-only: the API returns `password_set: true` instead of the password, and a `PATCH` without
 `password` keeps the stored one. Tokens with the same effective connection share one connection pool.
+
+### Admin UI
+
+Open `http://<server>:3000/admin`, sign in with the server URL and the `AUTH_TOKEN` value (leave it empty if auth
+is disabled). The session is kept in `sessionStorage` and cleared when the browser tab is closed.
+
+**Token list** — server info with the default connection and enabled performance features, then every token with
+status, connection (server default, host / service or TNS alias) and last use:
+
+![Admin UI: token list](docs/images/admin-tokens.png)
+
+<table>
+  <tr>
+    <td width="33%" valign="top"><b>Login</b><br><img src="docs/images/admin-login.png" alt="Admin UI: login"></td>
+    <td width="33%" valign="top"><b>New token with its own connection</b> — TNS alias over TCPS with server certificate DN pinning; Diagnostics/Tuning Pack per token<br><img src="docs/images/admin-create-token.png" alt="Admin UI: create token with TNS alias connection"></td>
+    <td width="33%" valign="top"><b>Token value is shown only once</b><br><img src="docs/images/admin-token-created.png" alt="Admin UI: one-time token display"></td>
+  </tr>
+</table>
+
+Editing a token changes its name, active state or connection; passwords are never shown and stay unchanged when
+the field is left empty. Deleting a token revokes access immediately.
+
+---
+
+## Logging
+
+All activity goes to stderr (`docker logs oracle-mcp-server`) in the format `[timestamp] [LEVEL] [CATEGORY] …`:
+tool calls, MCP session start/stop, rejected logins and admin actions. `LOG_LEVEL` (`debug` / `info` / `warn` /
+`error`, default `info`) sets the minimum level.
+
+Real output at the default level `info` — three clients working in parallel (one of them over the TNS alias `FREE`
+with the performance tools), an `UPDATE` rejected by the read-only database user of `reporting-team`, and four
+rejected logins (disabled token, unknown token, wrong admin token, missing token). SQL text is replaced by its length:
+
+![Log output at LOG_LEVEL=info](docs/images/logs-info.png)
+
+With `LOG_LEVEL=debug` the full SQL text is logged, plus internals such as pool creation:
+
+![Log output at LOG_LEVEL=debug](docs/images/logs-debug.png)
+
+Line format, all categories and keys, and ready-to-use Filebeat / Logstash configurations:
+[docs/logging.md](docs/logging.md).
 
 ---
 
