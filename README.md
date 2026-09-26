@@ -6,25 +6,57 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/tommi2day/oracle-mcp-server)](https://hub.docker.com/r/tommi2day/oracle-mcp-server)
 [![License: MIT](https://img.shields.io/github/license/tommi2day/oracle-mcp-server)](LICENSE)
 
-[Model Context Protocol](https://modelcontextprotocol.io) server that gives Claude (and other MCP clients)
-access to **Oracle Database** — the Oracle sibling of
+[Model Context Protocol](https://modelcontextprotocol.io) server that gives AI tools (Claude, Copilot, Cursor and
+other MCP clients) access to **Oracle Database** — the Oracle sibling of
 [tommi2day/pg-mcp-server](https://github.com/tommi2day/pg-mcp-server).
 
-- **Transports:** `stdio` (Claude Desktop) and Streamable HTTP / HTTPS (remote, multi-user)
-- **Connection methods:** classic host/port/service (or SID), TNS alias from `tnsnames.ora`,
-  free connect strings (Easy Connect Plus, full descriptors) and **JDBC URLs**
-- **Network:** plain SQL*Net (**TCP**) and TLS (**TCPS**) with wallets, server DN matching and private CAs
-- **Client config files** (`tnsnames.ora`, `sqlnet.ora`, `ewallet.pem`, `cwallet.sso`) via a volume
-  mount (`TNS_ADMIN`) or Kubernetes Secrets/ConfigMaps
-- **Driver:** [node-oracledb](https://node-oracledb.readthedocs.io) *thin* mode (pure JavaScript, default)
-  or *thick* mode (Oracle Instant Client, optional image variant)
-- **Multi-user:** bearer-token auth, per-token database connections, admin UI ([screenshots](#admin-ui)) + REST API,
-  secrets encrypted at rest, structured audit log ([example](#logging))
+## Features
+
+- **14 tools:** schema browsing (`list_schemas`, `list_tables`, `describe_table`), read-only `query`, `execute` for
+  DML/DDL/PL/SQL with `DBMS_OUTPUT`, and performance analysis (execution plans, top SQL, sessions, optimizer
+  statistics; ASH/AWR and SQL Monitor only when the packs are licensed) — [details](#tools)
+- **Safe reads:** `query` runs in `SET TRANSACTION READ ONLY` and is always rolled back, so Oracle itself rejects
+  writes; only `SELECT`/`WITH` are accepted (DDL would commit implicitly); results capped at 200 rows
+  (`ORA_MAX_ROWS`) to keep the LLM context small
+- **Every Oracle connection style:** host/port/service or SID, TNS alias from `tnsnames.ora`, Easy Connect Plus,
+  full descriptors and **JDBC URLs**; plain **TCP** or **TCPS** with wallets, private CAs and server DN pinning;
+  node-oracledb *thin* mode (no client install) or *thick* mode (Instant Client image variant)
+- **Multi-user:** bearer tokens (admin and client), **one database connection per token**, managed at runtime in a
+  web admin UI ([screenshots](#admin-ui)), REST API or `admincli.sh`; DB and wallet passwords encrypted at rest
+- **Traceable in the database:** each session carries `MODULE`, `ACTION` = tool and `CLIENT_IDENTIFIER` = token
+  name ([Session identification](#session-identification)); plus a structured audit log of tool calls, sessions,
+  rejected logins and admin actions ([example](#logging))
+- **Transport & operations:** stdio or Streamable HTTP/HTTPS (optional mTLS), Docker image, docker compose with an
+  Oracle Free test database, Helm chart (existing Secrets, `TNS_ADMIN` from Secrets/ConfigMaps, ingress, HPA,
+  non-root); only two runtime dependencies (MCP SDK, `oracledb`)
+
+### When to choose this server
+
+Choose it when **several people or AI clients share Oracle access through one central service** — with
+revocable tokens instead of database passwords in every client config, per-token database users, TCPS wallets
+kept on the server, and an audit trail in both the log and `V$SESSION`.
+
+| | Local Oracle MCP servers (e.g. SQLcl `sql -mcp`) | oracle-mcp-server |
+|---|---|---|
+| Deployment | Process per user on the workstation (stdio) | Central service (Docker / Kubernetes) plus stdio |
+| Client authentication | Whoever can start it | Bearer tokens, revocable at runtime |
+| Credentials & wallets | On every client machine | Stay on the server; clients only get a token |
+| Databases per instance | Saved connections of that user | One connection per token, managed centrally |
+| Audit | Log table `DBTOOLS$MCP_LOG` and `V$SESSION` | Server log (token, tool, client IP, rejected logins) and `CLIENT_IDENTIFIER` / `ACTION` in `V$SESSION` |
+
+**When to choose something else:** for a single developer working locally with SQLcl anyway, Oracle's
+[SQLcl MCP Server](https://docs.oracle.com/en/database/oracle/sql-developer-command-line/25.2/sqcug/using-oracle-sqlcl-mcp-server.html)
+needs no extra service. On Autonomous AI Database, the built-in
+[Autonomous AI Database MCP Server](https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/about-mcp-server.html)
+exposes Select AI Agent tools with OAuth. For several database engines behind one server, look at
+[DBHub](https://github.com/bytebase/dbhub). oracle-mcp-server focuses on secure, audited, multi-user SQL access to
+any Oracle Database (on-premises, cloud, container) — self-hosted, with no Oracle client install needed.
 
 ---
 
 ## Contents
 
+- [Features](#features)
 - [Tools](#tools)
 - [Quick start](#quick-start)
 - [Connection methods](#connection-methods)

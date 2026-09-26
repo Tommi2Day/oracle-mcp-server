@@ -1,7 +1,7 @@
 {
   "name": "oracle-mcp-server",
   "version": "0.2.0",
-  "description": "Oracle Database MCP Server for Claude – stdio & HTTP",
+  "description": "Oracle Database MCP Server for AI tools – stdio & HTTP",
   "license": "MIT",
   "author": "Tommi2Day",
   "repository": {

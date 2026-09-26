@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Described as an MCP server "for AI tools" instead of "for Claude" (`package.json`, Helm chart, README).
+- README: feature overview and a "When to choose this server" section comparing it with local Oracle MCP servers
+  (SQLcl), the Autonomous AI Database MCP Server and DBHub; `DOCKERHUB.md` gets a short version.
+
 ## [0.2.0] - 2026-09-26
 
 ### Added

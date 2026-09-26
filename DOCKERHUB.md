@@ -4,6 +4,13 @@ Multi-user [Model Context Protocol](https://modelcontextprotocol.io) server for 
 token auth, per-token database connections, admin UI, audit logging, TLS.
 Source & full documentation: https://github.com/tommi2day/oracle-mcp-server
 
+Gives AI tools (Claude, Copilot, Cursor and other MCP clients) SQL access to any Oracle Database. Choose it when
+several people or AI clients share Oracle access through **one central service**: revocable tokens instead of
+database passwords in every client config, per-token database users, TCPS wallets kept on the server, and an audit
+trail in both the log and `V$SESSION` (`CLIENT_IDENTIFIER` = token name). For a single developer working locally,
+Oracle's SQLcl MCP server (`sql -mcp`) needs no extra service
+([comparison](https://github.com/Tommi2Day/oracle-mcp-server#when-to-choose-this-server)).
+
 ## Tags
 
 - `latest`, `<version>` — thin mode (pure JavaScript driver, no Oracle Client)
