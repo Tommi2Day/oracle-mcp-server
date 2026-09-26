@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Oracle MCP Server",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "REST API for the Oracle MCP Server. Exposes a health endpoint, MCP Streamable-HTTP transport, and an admin API for token management. Tokens and their optional per-token database connections are stored in a local JSON file (TOKENS_FILE)."
   },
   "servers": [
