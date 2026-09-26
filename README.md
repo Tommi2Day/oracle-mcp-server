@@ -3,7 +3,7 @@
 [![CI](https://github.com/Tommi2Day/oracle-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/Tommi2Day/oracle-mcp-server/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/Tommi2Day/oracle-mcp-server/graph/badge.svg)](https://codecov.io/gh/Tommi2Day/oracle-mcp-server)
 [![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/tommi2day/oracle-mcp-server)](https://github.com/Tommi2Day/oracle-mcp-server/releases)
-[![Docker Pulls](https://img.shields.io/docker/pulls/tommi2day/oracle-mcp-server)](https://hub.docker.com/r/tommi2day/oracle-mcp-server)
+[![Docker Pulls](https://img.shields.io/docker/pulls/tommi2day/oracle-mcp-server?logo=docker)](https://hub.docker.com/r/tommi2day/oracle-mcp-server)
 [![License: MIT](https://img.shields.io/github/license/tommi2day/oracle-mcp-server)](LICENSE)
 
 [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI tools (Claude, Copilot, Cursor and
