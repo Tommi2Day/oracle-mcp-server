@@ -65,6 +65,11 @@ Manage tokens and their database connections (host/service, TNS alias, connect s
 
 ![Admin UI: token list](https://raw.githubusercontent.com/Tommi2Day/oracle-mcp-server/main/docs/images/admin-tokens.png)
 
+Switch it to your corporate design with `ADMIN_LOGO` (logo file or URL) and `ADMIN_THEME_CSS` (overrides the color
+variables) — see [Admin UI branding](https://github.com/Tommi2Day/oracle-mcp-server#admin-ui-branding):
+
+![Admin UI with corporate logo and colors](https://raw.githubusercontent.com/Tommi2Day/oracle-mcp-server/main/docs/images/admin-branding.png)
+
 ## Audit logging
 
 All activity is written to stderr (`docker logs oracle-mcp-server`): tool calls, session start/stop, rejected logins
@@ -77,7 +82,7 @@ and admin actions. SQL text is only logged at `LOG_LEVEL=debug`.
 `AUTH_TOKEN`, `STORE_ENCRYPTION_KEY`, `ORA_CONNECT_STRING`, `ORA_TNS_ALIAS`, `ORA_HOST`, `ORA_PORT`,
 `ORA_SERVICE_NAME`, `ORA_SID`, `ORA_PROTOCOL`, `ORA_USER`, `ORA_PASSWORD`, `ORA_WALLET_LOCATION`,
 `ORA_WALLET_PASSWORD`, `ORA_SSL_SERVER_DN_MATCH`, `ORA_SSL_SERVER_CERT_DN`, `ORA_TLS_CA_FILE`,
-`ORA_DRIVER_MODE`, `ORA_PERF_TOOLS`, `ORA_DIAGNOSTICS_PACK`, `ORA_TUNING_PACK`, `TLS_ENABLED`, `LOG_LEVEL` — see the GitHub README for the full reference.
+`ORA_DRIVER_MODE`, `ORA_PERF_TOOLS`, `ORA_DIAGNOSTICS_PACK`, `ORA_TUNING_PACK`, `TLS_ENABLED`, `LOG_LEVEL`, `ADMIN_THEME_CSS`, `ADMIN_LOGO` — see the GitHub README for the full reference.
 
 ## License
 

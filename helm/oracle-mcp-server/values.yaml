@@ -97,6 +97,18 @@ auth:
   storeEncryptionKey: ""
   # storeEncryptionKeySecret: "my-store-key"   # Secret key must be "key"
 
+# ── Admin UI branding (corporate logo and colors) ─────────────────────────────
+# ConfigMap with a stylesheet (overrides the CSS variables of admin.html) and a logo,
+# mounted read-only at /branding:
+#   kubectl -n mcp create configmap mcp-branding \
+#     --from-file=examples/admin-theme/theme.css --from-file=examples/admin-theme/logo.svg
+adminUi:
+  brandingConfigMap: ""
+  # File name in the ConfigMap → ADMIN_THEME_CSS
+  themeCss: ""        # e.g. theme.css
+  # File name in the ConfigMap (svg/png/jpg/gif/webp) or an http(s) URL → ADMIN_LOGO
+  logo: ""            # e.g. logo.svg
+
 # ── MCP Server ────────────────────────────────────────────────────────────────
 server:
   # Name shown in MCP clients (e.g. Claude browser tab) and the Admin UI.

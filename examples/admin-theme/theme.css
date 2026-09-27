@@ -1,0 +1,36 @@
+/*
+ * Example corporate theme for the admin UI (ADMIN_THEME_CSS).
+ * Fictional "ACME data" design: light header, petrol/teal primary color, amber accent.
+ * All variables are listed in the :root block at the top of admin.html.
+ */
+:root {
+  --font:          "Segoe UI", Arial, Helvetica, sans-serif;
+  --radius:        4px;
+
+  --bg:            #eef2f3;
+  --surface-alt:   #f5f8f8;
+  --row-hover:     #f0f8f7;
+  --border:        #d5dfe1;
+  --border-light:  #e8eef0;
+  --text:          #12333a;
+  --text-muted:    #56707a;
+  --text-faint:    #8fa3aa;
+
+  --primary:       #00857c;
+  --primary-dk:    #006b63;
+  --border-focus:  #00857c;
+  --focus-ring:    rgb(0 133 124/.15);
+
+  --header-bg:     #ffffff;
+  --header-text:   #12333a;
+  --header-muted:  #56707a;
+  --header-border: #c3d0d3;
+  --header-hover:  #e6f3f2;
+
+  --logo-height:        44px;
+  --header-logo-height: 30px;
+}
+
+/* Additional rules are allowed, too: accent bar below the header */
+header { border-bottom: 3px solid #f2a900; box-shadow: 0 1px 4px rgb(0 0 0/.08); }
+.btn-primary, .btn-new, .btn-submit { text-transform: uppercase; letter-spacing: .04em; }

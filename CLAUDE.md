@@ -38,6 +38,9 @@ docker build --build-arg ORACLE_THICK=true -t oracle-mcp-server:thick .   # Inst
   Timestamps in ASH/AWR are server-local `TIMESTAMP`s — compare with `CAST(SYSTIMESTAMP AS TIMESTAMP)`, never
   `SYSTIMESTAMP` (session time zone shifts the window). AWR deltas use LEFT JOIN on the begin snapshot.
 - **`src/format.ts`** — `formatCell`, `formatTable` (aligned text tables).
+- **`src/branding.ts`** — admin UI branding: `loadAdminBranding` (`ADMIN_THEME_CSS`, `ADMIN_LOGO` → data URI or URL),
+  `renderAdminHtml` fills `__SERVER_NAME__` (escaped), `<!--theme-->` and the `<!--logo-->…<!--/logo-->` markers.
+  All colors in `admin.html` are `:root` CSS variables — don't add hard-coded colors; example in `examples/admin-theme/`.
 - **`scripts/sql/grant_perf_privileges.sql`** — grants for the perf tools; keep its object lists and the privilege
   table in `docs/performance.md` in sync with the views queried in `src/perf.ts`.
 - **`admin.html`** — single-file admin SPA (from pg-mcp-server, connection form adapted to Oracle fields).

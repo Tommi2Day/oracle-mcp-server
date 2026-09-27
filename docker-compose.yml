@@ -41,6 +41,9 @@ services:
       # ── Server identity / logging ─────────────────────────────────────────
       MCP_SERVER_NAME: "${MCP_SERVER_NAME:-oracle-mcp-server}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
+      # Admin UI branding (logo + colors), files from the /branding mount below
+      ADMIN_THEME_CSS: "${ADMIN_THEME_CSS:-}"
+      ADMIN_LOGO: "${ADMIN_LOGO:-}"
 
       # ── Authentication / token store ──────────────────────────────────────
       AUTH_TOKEN: "${AUTH_TOKEN:-}"
@@ -69,6 +72,8 @@ services:
       - mcp-certs:/certs             # persist TLS certs (self-signed cert is generated here on first start)
       # tnsnames.ora, sqlnet.ora and wallets (read-only)
       - ${TNS_ADMIN_DIR:-./examples/tns_admin}:/opt/oracle/network/admin:ro
+      # admin UI theme.css / logo (ADMIN_THEME_CSS, ADMIN_LOGO)
+      - ${BRANDING_DIR:-./examples/admin-theme}:/branding:ro
 
     networks:
       - mcp-net

@@ -37,6 +37,7 @@ import {
   type OraConnection, type PerfFeatures, type SessionContext,
 } from "./oracle.js";
 import { formatCell } from "./format.js";
+import { loadAdminBranding, renderAdminHtml } from "./branding.js";
 import { PERF_TOOL_NAMES, perfToolList, runPerfTool, assertPerfToolEnabled } from "./perf.js";
 
 export { toIdentifier } from "./oracle.js";
@@ -51,7 +52,7 @@ const MAX_ROWS = parseInt(process.env.ORA_MAX_ROWS || "200", 10) || 200;
 let cachedAdminHtml: Buffer | undefined;
 try {
   const raw = fs.readFileSync(new URL("../admin.html", import.meta.url), "utf8");
-  cachedAdminHtml = Buffer.from(raw.replaceAll("__SERVER_NAME__", mcpServerName));
+  cachedAdminHtml = Buffer.from(renderAdminHtml(raw, mcpServerName, loadAdminBranding()));
 } catch { /* admin UI not available */ }
 
 // ── Driver setup ─────────────────────────────────────────────────────────────

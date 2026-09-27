@@ -58,6 +58,14 @@ spec:
             {{- end }}
             - name: LOG_LEVEL
               value: {{ .Values.server.logLevel | default "info" | quote }}
+            {{- with .Values.adminUi.themeCss }}
+            - name: ADMIN_THEME_CSS
+              value: {{ printf "/branding/%s" . | quote }}
+            {{- end }}
+            {{- with .Values.adminUi.logo }}
+            - name: ADMIN_LOGO
+              value: {{ (regexMatch "^https?://" .) | ternary . (printf "/branding/%s" .) | quote }}
+            {{- end }}
 
             # ── HTTP TLS ──────────────────────────────────────────────────
             {{- if .Values.server.tlsEnabled }}
@@ -178,6 +186,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            {{- if .Values.adminUi.brandingConfigMap }}
+            - name: branding
+              mountPath: /branding
+              readOnly: true
+            {{- end }}
             {{- if .Values.server.tlsEnabled }}
             - name: certs
               mountPath: /certs
@@ -260,6 +273,11 @@ spec:
           secret:
             secretName: {{ .name }}
             defaultMode: 0440
+        {{- end }}
+        {{- with .Values.adminUi.brandingConfigMap }}
+        - name: branding
+          configMap:
+            name: {{ . }}
         {{- end }}
         {{- if .Values.tls.clientCaSecret }}
         - name: client-ca

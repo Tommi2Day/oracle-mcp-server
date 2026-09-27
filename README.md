@@ -22,7 +22,8 @@ other MCP clients) access to **Oracle Database** — the Oracle sibling of
   full descriptors and **JDBC URLs**; plain **TCP** or **TCPS** with wallets, private CAs and server DN pinning;
   node-oracledb *thin* mode (no client install) or *thick* mode (Instant Client image variant)
 - **Multi-user:** bearer tokens (admin and client), **one database connection per token**, managed at runtime in a
-  web admin UI ([screenshots](#admin-ui)), REST API or `admincli.sh`; DB and wallet passwords encrypted at rest
+  web admin UI ([screenshots](#admin-ui)), REST API or `admincli.sh`; DB and wallet passwords encrypted at rest;
+  admin UI with your own logo and colors ([branding](#admin-ui-branding))
 - **Traceable in the database:** each session carries `MODULE`, `ACTION` = tool and `CLIENT_IDENTIFIER` = token
   name ([Session identification](#session-identification)); plus a structured audit log of tool calls, sessions,
   rejected logins and admin actions ([example](#logging))
@@ -288,6 +289,8 @@ Outside the image set `ORA_CLIENT_LIB_DIR` to the Instant Client directory for t
 | `TOKENS_FILE` | `./tokens.json` (image: `/data/tokens.json`) | Token store |
 | `STORE_ENCRYPTION_KEY` | – | Encrypts `password` / `wallet_password` in the token store (AES-256-GCM) |
 | `MCP_SERVER_NAME` | `oracle-mcp-server` | Name shown in MCP clients and the admin UI |
+| `ADMIN_THEME_CSS` | – | CSS file loaded after the built-in admin UI styles ([branding](#admin-ui-branding)) |
+| `ADMIN_LOGO` | – | Admin UI logo: file (`.svg` `.png` `.jpg` `.gif` `.webp`, embedded) or `http(s)://` URL |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` (SQL text only at `debug`) |
 | `TLS_ENABLED` | `false` | HTTPS for the MCP endpoint |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | `/certs/tls.crt` / `/certs/tls.key` | Server certificate (self-signed one is generated if missing) |
@@ -403,6 +406,69 @@ status, connection (server default, host / service or TNS alias) and last use:
 
 Editing a token changes its name, active state or connection; passwords are never shown and stay unchanged when
 the field is left empty. Deleting a token revokes access immediately.
+
+### Admin UI branding
+
+The admin UI can be switched to a corporate design without rebuilding the image:
+
+| Variable | Effect |
+|----------|--------|
+| `ADMIN_LOGO` | Replaces the database icon on the login card and in the header. A file is embedded as data URI (`.svg`, `.png`, `.jpg`, `.gif`, `.webp`); an `http(s)://` URL is used as is (the browser must be able to reach it). |
+| `ADMIN_THEME_CSS` | Stylesheet injected after the built-in styles. Override the CSS variables below; any other CSS rule is allowed, too. |
+| `MCP_SERVER_NAME` | Title next to the logo and in the browser tab. |
+
+Both files are read once at startup; an unreadable file is logged as `[WARN] [CONFIG]` and the built-in design is
+used. The design is served to everyone who opens `/admin` (also before sign-in), so do not put anything
+confidential into it.
+
+All colors of the UI are CSS variables in the `:root` block at the top of [`admin.html`](admin.html):
+
+| Variable | Used for |
+|----------|----------|
+| `--primary`, `--primary-dk`, `--on-primary` | Buttons, links, toggles; hover color; text on primary |
+| `--border-focus`, `--focus-ring` | Focused inputs |
+| `--header-bg`, `--header-text`, `--header-muted`, `--header-border`, `--header-hover` | Top bar and its buttons |
+| `--brand-from`, `--brand-to` | Gradient of the built-in icon (without `ADMIN_LOGO`) |
+| `--bg`, `--surface`, `--surface-alt`, `--row-hover`, `--border`, `--border-light` | Page, cards, table header, rows |
+| `--text`, `--text-muted`, `--text-faint` | Text colors |
+| `--success*`, `--danger*`, `--toggle-off` | Status badges, alerts, delete dialog, switched-off toggles |
+| `--font`, `--radius` | Font stack, corner radius of cards and dialogs |
+| `--logo-height`, `--header-logo-height` | Logo height on the login card (40px) and in the header (28px) |
+
+[`examples/admin-theme/`](examples/admin-theme) contains a complete example (fictional "ACME data" design: light
+header with accent bar, teal primary color, own logo):
+
+```css
+:root {
+  --primary:      #00857c;
+  --primary-dk:   #006b63;
+  --header-bg:    #ffffff;
+  --header-text:  #12333a;
+  --font:         "Segoe UI", Arial, Helvetica, sans-serif;
+}
+header { border-bottom: 3px solid #f2a900; }   /* additional rules are fine */
+```
+
+```bash
+docker run -d -p 3000:3000 \
+  -v "$PWD/examples/admin-theme:/branding:ro" \
+  -e ADMIN_THEME_CSS=/branding/theme.css -e ADMIN_LOGO=/branding/logo.svg \
+  -e MCP_SERVER_NAME="ACME Oracle MCP" … tommi2day/oracle-mcp-server
+```
+
+With Helm put the files into a ConfigMap and set `adminUi.brandingConfigMap`, `adminUi.themeCss` and
+`adminUi.logo` (see [values.yaml](helm/oracle-mcp-server/values.yaml)):
+
+```bash
+kubectl -n mcp create configmap mcp-branding --from-file=examples/admin-theme/theme.css --from-file=examples/admin-theme/logo.svg
+```
+
+<table>
+  <tr>
+    <td width="70%" valign="top"><b>Token list with the example theme</b><br><img src="docs/images/admin-branding.png" alt="Admin UI with corporate logo and colors"></td>
+    <td width="30%" valign="top"><b>Login</b><br><img src="docs/images/admin-branding-login.png" alt="Admin UI login with corporate logo"></td>
+  </tr>
+</table>
 
 ---
 
