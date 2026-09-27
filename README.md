@@ -23,7 +23,8 @@ other MCP clients) access to **Oracle Database** — the Oracle sibling of
   node-oracledb *thin* mode (no client install) or *thick* mode (Instant Client image variant)
 - **Multi-user:** bearer tokens (admin and client), **one database connection per token**, managed at runtime in a
   web admin UI ([screenshots](#admin-ui)), REST API or `admincli.sh`; DB and wallet passwords encrypted at rest;
-  admin UI with your own logo and colors ([branding](#admin-ui-branding))
+  admin UI with your own logo and colors ([branding](#admin-ui-branding)); optionally clients log in with their own
+  database account or choose the database ([client-supplied connections](#client-supplied-connections))
 - **Traceable in the database:** each session carries `MODULE`, `ACTION` = tool and `CLIENT_IDENTIFIER` = token
   name ([Session identification](#session-identification)); plus a structured audit log of tool calls, sessions,
   rejected logins and admin actions ([example](#logging))
@@ -289,6 +290,7 @@ Outside the image set `ORA_CLIENT_LIB_DIR` to the Instant Client directory for t
 | `TOKENS_FILE` | `./tokens.json` (image: `/data/tokens.json`) | Token store |
 | `STORE_ENCRYPTION_KEY` | – | Encrypts `password` / `wallet_password` in the token store (AES-256-GCM) |
 | `MCP_SERVER_NAME` | `oracle-mcp-server` | Name shown in MCP clients and the admin UI |
+| `ORA_CLIENT_CONNECTION` | `none` | `none` \| `credentials` \| `full`: connection parameters clients of the `AUTH_TOKEN` (or anonymous) may send as X-Oracle-* headers ([details](#client-supplied-connections)) |
 | `ADMIN_THEME_CSS` | – | CSS file loaded after the built-in admin UI styles ([branding](#admin-ui-branding)) |
 | `ADMIN_LOGO` | – | Admin UI logo: file (`.svg` `.png` `.jpg` `.gif` `.webp`, embedded) or `http(s)://` URL |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` (SQL text only at `debug`) |
@@ -385,6 +387,98 @@ Merge rules with the default connection:
 
 Secrets are write-only: the API returns `password_set: true` instead of the password, and a `PATCH` without
 `password` keeps the stored one. Tokens with the same effective connection share one connection pool.
+
+### Client-supplied connections
+
+By default a client always uses the connection of its token (or the server default). The admin can allow the
+clients of a token to send **their own connection parameters** — e.g. so that every user logs in with a personal
+database account instead of a shared technical user. The permission is the token field `client_connection`
+(admin UI: *Client-supplied connection*, `admincli.sh add-token … --client-connection` / `set-client-conn`):
+
+| `client_connection` | Client may send | Typical use |
+|---------------------|-----------------|-------------|
+| `none` (default) | nothing — X-Oracle-* headers are rejected with HTTP 403 | fixed connection |
+| `credentials` | `user` + `password`; target (host/alias/…) stays the token's or server's | personal DB accounts on one database |
+| `full` | additionally the target: `connect_string`, `tns_alias`, `host`, `port`, `service_name`, `sid`, `protocol`, `ssl_server_dn_match`, `ssl_server_cert_dn` | one token for many databases (the server can then reach any host the client names) |
+
+For the `AUTH_TOKEN` admin token (and anonymous access when auth is disabled) `ORA_CLIENT_CONNECTION` sets the
+same permission (default `none`).
+
+#### Call format
+
+The parameters are sent as **HTTP headers on the MCP `initialize` request** — the request that opens the MCP
+session (no `mcp-session-id` yet). They apply to the whole session; headers on later requests are ignored. Header
+name = `X-Oracle-` + field name with `_` → `-` (case-insensitive):
+
+| Header | Field | Mode |
+|--------|-------|------|
+| `X-Oracle-User`, `X-Oracle-Password` | `user`, `password` — always both | `credentials`, `full` |
+| `X-Oracle-Connect-String` | Easy Connect, descriptor or JDBC URL (`jdbc:oracle:thin:user/pw@…` also sets the credentials) | `full` |
+| `X-Oracle-Tns-Alias` | alias from the **server's** `tnsnames.ora` | `full` |
+| `X-Oracle-Host`, `X-Oracle-Port`, `X-Oracle-Service-Name` / `X-Oracle-Sid`, `X-Oracle-Protocol` | host target (`tcp` / `tcps`) | `full` |
+| `X-Oracle-Ssl-Server-Dn-Match`, `X-Oracle-Ssl-Server-Cert-Dn` | TCPS certificate checks | `full` |
+
+```http
+POST /mcp HTTP/1.1
+Authorization: Bearer <token>
+Content-Type: application/json
+Accept: application/json, text/event-stream
+X-Oracle-User: jdoe
+X-Oracle-Password: s3cret
+X-Oracle-Host: db2.example.com
+X-Oracle-Service-Name: SALESPDB
+
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},
+ "clientInfo":{"name":"my-client","version":"1.0"}}}
+```
+
+Client configuration — MCP clients send configured headers with every request, so a static header entry is all
+that is needed:
+
+```jsonc
+// .mcp.json (Claude Code) / any client with Streamable HTTP + headers
+{
+  "mcpServers": {
+    "oracle-sales": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>",
+        "X-Oracle-User": "jdoe",
+        "X-Oracle-Password": "${ORACLE_PASSWORD}"
+      }
+    }
+  }
+}
+```
+
+```bash
+# Claude Code CLI
+claude mcp add --transport http oracle-sales https://mcp.example.com/mcp \
+  --header "Authorization: Bearer <token>" --header "X-Oracle-User: jdoe" --header "X-Oracle-Password: s3cret"
+
+# Claude Desktop and other stdio-only clients via mcp-remote
+npx mcp-remote https://mcp.example.com/mcp --header "Authorization: Bearer <token>" \
+  --header "X-Oracle-User: jdoe" --header "X-Oracle-Password: s3cret"
+```
+
+Rules and safeguards:
+
+- Client parameters override the token's connection: `user`/`password` replace the token's credentials; a
+  client target replaces the token's target (and its `ssl_server_cert_dn` pinning). The token's `tns_admin`, wallet
+  and licence switches (`diagnostics_pack`, `tuning_pack`) stay in effect.
+- A client target **requires client credentials** — the password of the token or server default is never sent to
+  a host chosen by the client.
+- Server-side files cannot be referenced: `tns_admin`, `wallet_location` and `wallet_password` are not accepted as
+  headers, and connect strings mentioning a wallet or `TNS_ADMIN` are rejected.
+- Rejected requests get HTTP 403 (not permitted) or 400 (invalid, e.g. `user` without `password`) with a JSON-RPC
+  error message, and are logged as `[AUTH] result="denied" … reason="client connection: …"`. A wrong database
+  password shows up as the ORA- error of the first tool call.
+- The permission is re-checked on every request: switching a token back to `none` ends the use of client
+  parameters in its open sessions immediately.
+- Sessions with client parameters get their own connection pool, which is closed when the last such session ends.
+  The session start log shows `connection="client" target="…" user="…"` (never the password).
+- Passwords travel in HTTP headers — use HTTPS (`TLS_ENABLED=true` or a TLS-terminating ingress).
 
 ### Admin UI
 
@@ -518,6 +612,7 @@ Key values (see `helm/oracle-mcp-server/values.yaml`):
   volume at `tnsAdmin.mountPath` (mode `0440`, readable through `fsGroup: 1000`)
 - `tnsAdmin.extraSecrets` → additional wallet/tnsnames directories for per-token connections
 - `auth.token` / `auth.existingSecret`, `auth.storeEncryptionKey`, `server.tlsEnabled`, `tls.*`, `persistence.*`
+- `oracle.clientConnection` (`ORA_CLIENT_CONNECTION` for the admin token), `adminUi.*` (branding)
 
 `scripts/helm_install.sh` wraps a typical install.
 

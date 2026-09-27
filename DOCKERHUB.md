@@ -43,7 +43,7 @@ In Kubernetes mount them from a Secret/ConfigMap (Helm chart: `tnsAdmin.existing
 
 | Path | Description |
 |------|-------------|
-| `/mcp` | MCP Streamable HTTP (Bearer token) |
+| `/mcp` | MCP Streamable HTTP (Bearer token); optional `X-Oracle-User` / `X-Oracle-Password` / `X-Oracle-Host` … headers if the token allows [client-supplied connections](https://github.com/Tommi2Day/oracle-mcp-server#client-supplied-connections) |
 | `/admin` | Admin UI for tokens and per-token connections |
 | `/admin/tokens` | Token REST API (admin token) |
 | `/info` | Server info and default connection (admin token) |
@@ -82,7 +82,7 @@ and admin actions. SQL text is only logged at `LOG_LEVEL=debug`.
 `AUTH_TOKEN`, `STORE_ENCRYPTION_KEY`, `ORA_CONNECT_STRING`, `ORA_TNS_ALIAS`, `ORA_HOST`, `ORA_PORT`,
 `ORA_SERVICE_NAME`, `ORA_SID`, `ORA_PROTOCOL`, `ORA_USER`, `ORA_PASSWORD`, `ORA_WALLET_LOCATION`,
 `ORA_WALLET_PASSWORD`, `ORA_SSL_SERVER_DN_MATCH`, `ORA_SSL_SERVER_CERT_DN`, `ORA_TLS_CA_FILE`,
-`ORA_DRIVER_MODE`, `ORA_PERF_TOOLS`, `ORA_DIAGNOSTICS_PACK`, `ORA_TUNING_PACK`, `TLS_ENABLED`, `LOG_LEVEL`, `ADMIN_THEME_CSS`, `ADMIN_LOGO` — see the GitHub README for the full reference.
+`ORA_DRIVER_MODE`, `ORA_PERF_TOOLS`, `ORA_DIAGNOSTICS_PACK`, `ORA_TUNING_PACK`, `ORA_CLIENT_CONNECTION`, `TLS_ENABLED`, `LOG_LEVEL`, `ADMIN_THEME_CSS`, `ADMIN_LOGO` — see the GitHub README for the full reference.
 
 ## License
 

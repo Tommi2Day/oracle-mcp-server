@@ -13,7 +13,7 @@ vi.mock("node:fs", () => ({
 import {
   getLogLevel, isLogEnabled, log, getClientIp, extractBearer, hashToken, checkAuth, checkAdminAuth,
   loadTokenStore, saveTokenStore, migrateTokenStore, clearTokenStoreCache, validateConnection,
-  cleanConnection, toSafeToken, type TokenRecord,
+  cleanConnection, toSafeToken, clientConnectionFromHeaders, clientHeaderName, type TokenRecord,
 } from "../src/lib.js";
 
 const ENOENT = () => { throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); };
@@ -71,7 +71,7 @@ describe("getClientIp / extractBearer", () => {
 
 describe("checkAuth", () => {
   it("allows anonymous access when AUTH_TOKEN is unset", async () => {
-    expect(await checkAuth(makeReq("POST", "/mcp"), makeRes())).toEqual({ ok: true, name: "anonymous", connection: null });
+    expect(await checkAuth(makeReq("POST", "/mcp"), makeRes())).toEqual({ ok: true, name: "anonymous", connection: null, clientConnection: "none" });
   });
   it("accepts the admin token", async () => {
     process.env.AUTH_TOKEN = "admin-tok";
@@ -90,8 +90,22 @@ describe("checkAuth", () => {
     const conn = { tns_alias: "PROD", user: "app", password: "pw" };
     mockReadFile.mockReturnValue(JSON.stringify({ tokens: [token({ connection: conn })], next_id: 2 }));
     const r = await checkAuth(makeReq("POST", "/mcp", { headers: { authorization: "Bearer secret-token" } }), makeRes());
-    expect(r).toEqual({ ok: true, name: "t1", connection: conn });
+    expect(r).toEqual({ ok: true, name: "t1", connection: conn, clientConnection: "none" });
     expect(mockWriteFile).toHaveBeenCalled(); // last_used_at updated
+  });
+  it("returns the client_connection permission of file tokens and ORA_CLIENT_CONNECTION for the admin token", async () => {
+    process.env.AUTH_TOKEN = "admin-tok";
+    mockReadFile.mockReturnValue(JSON.stringify({ tokens: [token({ client_connection: "full" })], next_id: 2 }));
+    const r = await checkAuth(makeReq("POST", "/mcp", { headers: { authorization: "Bearer secret-token" } }), makeRes());
+    expect(r).toMatchObject({ ok: true, clientConnection: "full" });
+    process.env.ORA_CLIENT_CONNECTION = "Credentials";
+    try {
+      expect(await checkAuth(makeReq("POST", "/mcp"), makeRes())).toMatchObject({ name: "admin", clientConnection: "credentials" });
+      process.env.ORA_CLIENT_CONNECTION = "bogus";
+      expect(await checkAuth(makeReq("POST", "/mcp"), makeRes())).toMatchObject({ clientConnection: "none" });
+    } finally {
+      delete process.env.ORA_CLIENT_CONNECTION;
+    }
   });
   it("rejects disabled file tokens", async () => {
     process.env.AUTH_TOKEN = "admin-tok";
@@ -165,5 +179,30 @@ describe("validateConnection / cleanConnection / toSafeToken", () => {
     const safe = toSafeToken(token({ connection: { host: "h", password: "pw", wallet_password: "w" } }));
     expect(safe).not.toHaveProperty("token_hash");
     expect(safe.connection).toEqual({ host: "h", password_set: true, wallet_password_set: true });
+  });
+});
+
+describe("clientConnectionFromHeaders", () => {
+  it("returns null without X-Oracle-* headers", () => {
+    expect(clientConnectionFromHeaders({ authorization: "Bearer x", "x-other": "1" })).toBeNull();
+    expect(clientConnectionFromHeaders({ "x-oracle-user": "  " })).toBeNull();
+  });
+  it("maps headers to connection fields", () => {
+    expect(clientConnectionFromHeaders({
+      "x-oracle-user": "scott", "x-oracle-password": "tiger", "x-oracle-host": "db1", "x-oracle-port": "1522",
+      "x-oracle-service-name": "PDB1", "x-oracle-protocol": "tcps", "x-oracle-ssl-server-cert-dn": "CN=db1",
+    })).toEqual({ user: "scott", password: "tiger", host: "db1", port: "1522", service_name: "PDB1",
+      protocol: "tcps", ssl_server_cert_dn: "CN=db1" });
+    expect(clientConnectionFromHeaders({ "x-oracle-connect-string": "db:1521/svc" })).toEqual({ connect_string: "db:1521/svc" });
+  });
+  it("rejects unknown headers and invalid values with 400", () => {
+    expect(() => clientConnectionFromHeaders({ "x-oracle-tns-admin": "/etc" }))
+      .toThrow(expect.objectContaining({ status: 400, message: expect.stringContaining("Unknown header X-Oracle-Tns-Admin") }));
+    expect(() => clientConnectionFromHeaders({ "x-oracle-port": "abc" })).toThrow(/port/);
+    expect(() => clientConnectionFromHeaders({ "x-oracle-protocol": "udp" })).toThrow(/protocol/);
+  });
+  it("clientHeaderName", () => {
+    expect(clientHeaderName("ssl_server_cert_dn")).toBe("X-Oracle-Ssl-Server-Cert-Dn");
+    expect(clientHeaderName("user")).toBe("X-Oracle-User");
   });
 });

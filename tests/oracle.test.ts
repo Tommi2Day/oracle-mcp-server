@@ -3,7 +3,7 @@ import {
   parseConnectString, buildHostConnectString, connectionFromEnv, mergeConnection,
   resolvePoolAttributes, describeConnection, redactConnectString, normalizeSql, isPlsql,
   usesTcps, extractJdbcCredentials, getDriverMode, trustedCaFile, inspectWallet,
-  sessionTags, truncateBytes, programName,
+  sessionTags, truncateBytes, programName, applyClientConnection, parseClientConnectionMode,
 } from "../src/oracle.js";
 
 describe("parseConnectString", () => {
@@ -287,5 +287,61 @@ describe("session tags", () => {
   it("passes program to thin pool attributes only", () => {
     expect(resolvePoolAttributes({ host: "h" }, { program: "p", inspectWallet: () => "none" }).program).toBe("p");
     expect(resolvePoolAttributes({ host: "h" }, { mode: "thick", program: "p" })).not.toHaveProperty("program");
+  });
+});
+
+describe("applyClientConnection", () => {
+  const token = { tns_alias: "PROD", user: "app", password: "pw", wallet_location: "/w", ssl_server_cert_dn: "CN=prod", diagnostics_pack: true };
+
+  it("returns the token connection without client parameters", () => {
+    expect(applyClientConnection(token, {}, "none")).toBe(token);
+    expect(applyClientConnection(null, { user: "" }, "full")).toBeNull();
+  });
+
+  it("rejects everything when the token does not allow it", () => {
+    expect(() => applyClientConnection(token, { user: "u", password: "p" }, "none"))
+      .toThrow(expect.objectContaining({ status: 403 }));
+  });
+
+  it("credentials mode replaces only user and password", () => {
+    expect(applyClientConnection(token, { user: "scott", password: "tiger" }, "credentials"))
+      .toEqual({ ...token, user: "scott", password: "tiger" });
+    expect(applyClientConnection(null, { user: "scott", password: "tiger" }, "credentials"))
+      .toEqual({ user: "scott", password: "tiger" });
+    expect(() => applyClientConnection(token, { host: "db2", user: "u", password: "p" }, "credentials"))
+      .toThrow(/Not allowed.*host/);
+  });
+
+  it("requires user and password together", () => {
+    expect(() => applyClientConnection(null, { user: "scott" }, "credentials")).toThrow(/together/);
+    expect(() => applyClientConnection(null, { password: "x" }, "credentials")).toThrow(/together/);
+  });
+
+  it("full mode replaces the target and drops the token's TLS pinning, keeps wallet and packs", () => {
+    expect(applyClientConnection(token, { host: "db2", port: "1522", service_name: "S", user: "u", password: "p" }, "full"))
+      .toEqual({ host: "db2", port: "1522", service_name: "S", user: "u", password: "p", wallet_location: "/w", diagnostics_pack: true });
+  });
+
+  it("full mode never sends the token's credentials to a client target", () => {
+    expect(() => applyClientConnection(token, { host: "evil" }, "full")).toThrow(/requires user and password/);
+  });
+
+  it("accepts JDBC credentials and rejects file references in connect strings", () => {
+    expect(applyClientConnection(null, { connect_string: "jdbc:oracle:thin:scott/tiger@//db:1521/S" }, "full"))
+      .toEqual({ connect_string: "jdbc:oracle:thin:@//db:1521/S", user: "scott", password: "tiger" });
+    expect(() => applyClientConnection(null, { connect_string: "tcps://db:2484/S?wallet_location=/etc/w", user: "u", password: "p" }, "full"))
+      .toThrow(expect.objectContaining({ status: 400 }));
+  });
+
+  it("rejects target details without a target and never accepts server-side fields", () => {
+    expect(() => applyClientConnection(null, { port: "1522", user: "u", password: "p" }, "full")).toThrow(/require connect_string/);
+    expect(() => applyClientConnection(null, { tns_admin: "/x", user: "u", password: "p" } as never, "full")).toThrow(/tns_admin/);
+    expect(() => applyClientConnection(null, { diagnostics_pack: true } as never, "full")).toThrow(/diagnostics_pack/);
+  });
+
+  it("parseClientConnectionMode", () => {
+    expect(parseClientConnectionMode(undefined)).toBe("none");
+    expect(parseClientConnectionMode(" FULL ")).toBe("full");
+    expect(parseClientConnectionMode("all")).toBeNull();
   });
 });

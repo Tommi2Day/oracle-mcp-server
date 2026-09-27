@@ -5,7 +5,11 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { extractJdbcCredentials, type OraConnection } from "./oracle.js";
+import {
+  extractJdbcCredentials, parseClientConnectionMode, ClientConnectionError,
+  CLIENT_CREDENTIAL_FIELDS, CLIENT_TARGET_FIELDS,
+  type OraConnection, type ClientConnectionMode,
+} from "./oracle.js";
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -72,6 +76,8 @@ export interface TokenRecord {
   last_used_at: string | null;
   active: boolean;
   connection: OraConnection | null;
+  /** What MCP clients of this token may set via X-Oracle-* headers (default: none). */
+  client_connection?: ClientConnectionMode;
 }
 
 export interface TokenStore {
@@ -237,16 +243,23 @@ export function checkAdminAuth(req: IncomingMessage, res: ServerResponse): boole
 }
 
 export type AuthResult =
-  | { ok: true; name: string; connection: OraConnection | null }
+  | { ok: true; name: string; connection: OraConnection | null; clientConnection: ClientConnectionMode }
   | { ok: false };
+
+/** client_connection for the AUTH_TOKEN / anonymous sessions (ORA_CLIENT_CONNECTION, default none). */
+export function envClientConnectionMode(): ClientConnectionMode {
+  return parseClientConnectionMode(process.env.ORA_CLIENT_CONNECTION) ?? "none";
+}
 
 /** MCP auth — accepts AUTH_TOKEN env var OR any active file token. */
 export async function checkAuth(req: IncomingMessage, res: ServerResponse): Promise<AuthResult> {
   const authToken = getAuthToken();
-  if (!authToken) return { ok: true, name: "anonymous", connection: null };
+  if (!authToken) return { ok: true, name: "anonymous", connection: null, clientConnection: envClientConnectionMode() };
   const token = extractBearer(req);
   if (!token) { logAuthFailure(req, "missing token"); send401(res); return { ok: false }; }
-  if (timingSafeEqual(token, authToken)) return { ok: true, name: "admin", connection: null };
+  if (timingSafeEqual(token, authToken)) {
+    return { ok: true, name: "admin", connection: null, clientConnection: envClientConnectionMode() };
+  }
   const hash = hashToken(token);
   const store = loadTokenStore();
   const entry = store.tokens.find(t => t.token_hash === hash);
@@ -254,7 +267,42 @@ export async function checkAuth(req: IncomingMessage, res: ServerResponse): Prom
   if (!entry.active) { logAuthFailure(req, "token disabled", entry.name); send401(res); return { ok: false }; }
   entry.last_used_at = new Date().toISOString();
   try { saveTokenStore(store); } catch { /* best-effort */ }
-  return { ok: true, name: entry.name, connection: entry.connection || null };
+  return {
+    ok: true, name: entry.name, connection: entry.connection || null,
+    clientConnection: parseClientConnectionMode(entry.client_connection) ?? "none",
+  };
+}
+
+// ── Client-supplied connection (X-Oracle-* headers) ──────────────────────────
+export const CLIENT_HEADER_PREFIX = "x-oracle-";
+
+/** Header name for a connection field: ssl_server_cert_dn → X-Oracle-Ssl-Server-Cert-Dn. */
+export function clientHeaderName(field: string): string {
+  return "X-Oracle-" + field.split("_").map(w => w[0].toUpperCase() + w.slice(1)).join("-");
+}
+
+/**
+ * Reads the connection parameters an MCP client sends as X-Oracle-* headers (e.g.
+ * X-Oracle-User, X-Oracle-Host, X-Oracle-Connect-String). Returns null without such headers;
+ * throws ClientConnectionError (400) on unknown headers or invalid values.
+ */
+export function clientConnectionFromHeaders(headers: IncomingMessage["headers"]): OraConnection | null {
+  const known: readonly string[] = [...CLIENT_CREDENTIAL_FIELDS, ...CLIENT_TARGET_FIELDS];
+  const conn: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (!name.startsWith(CLIENT_HEADER_PREFIX) || value === undefined) continue;
+    const field = name.slice(CLIENT_HEADER_PREFIX.length).replaceAll("-", "_");
+    const v = (Array.isArray(value) ? value[0] : value).trim();
+    if (!v) continue;
+    if (!known.includes(field)) {
+      throw new ClientConnectionError(`Unknown header ${clientHeaderName(field)} (allowed: ${known.map(clientHeaderName).join(", ")})`, 400);
+    }
+    conn[field] = v;
+  }
+  if (!Object.keys(conn).length) return null;
+  const err = validateConnection(conn);
+  if (err) throw new ClientConnectionError(err, 400);
+  return conn as OraConnection;
 }
 
 // ── Connection validation ─────────────────────────────────────────────────────
@@ -329,6 +377,8 @@ export interface AdminHooks {
   onUpdate?: (before: TokenRecord, after: TokenRecord) => void;
 }
 
+const CLIENT_MODE_ERROR = '"client_connection" must be none, credentials or full';
+
 export async function handleAdminRequest(req: IncomingMessage, res: ServerResponse, { onDelete, onUpdate }: AdminHooks = {}): Promise<void> {
   if (!checkAdminAuth(req, res)) return;
 
@@ -352,13 +402,15 @@ export async function handleAdminRequest(req: IncomingMessage, res: ServerRespon
 
     // POST /admin/tokens – create new token
     if (req.method === "POST" && !id) {
-      const { name, connection } = JSON.parse((await readBody(req)) || "{}");
+      const { name, connection, client_connection } = JSON.parse((await readBody(req)) || "{}");
       if (!name || typeof name !== "string" || !name.trim()) {
         sendJson(res, 400, { error: '"name" is required' });
         return;
       }
       const connErr = validateConnection(connection);
       if (connErr) { sendJson(res, 400, { error: connErr }); return; }
+      const clientMode = parseClientConnectionMode(client_connection);
+      if (!clientMode) { sendJson(res, 400, { error: CLIENT_MODE_ERROR }); return; }
       const token = crypto.randomBytes(32).toString("hex");
       const store = loadTokenStore();
       const entry: TokenRecord = {
@@ -369,6 +421,7 @@ export async function handleAdminRequest(req: IncomingMessage, res: ServerRespon
         last_used_at: null,
         active:       true,
         connection:   cleanConnection(connection),
+        ...(clientMode !== "none" && { client_connection: clientMode }),
       };
       store.tokens.push(entry);
       saveTokenStore(store);
@@ -379,8 +432,9 @@ export async function handleAdminRequest(req: IncomingMessage, res: ServerRespon
     // PATCH /admin/tokens/:id – update name, active and/or connection
     if (req.method === "PATCH" && id) {
       const updates = JSON.parse((await readBody(req)) || "{}");
-      if (updates.name === undefined && updates.active === undefined && updates.connection === undefined) {
-        sendJson(res, 400, { error: "No valid fields (name, active, connection)" });
+      if (updates.name === undefined && updates.active === undefined && updates.connection === undefined
+          && updates.client_connection === undefined) {
+        sendJson(res, 400, { error: "No valid fields (name, active, connection, client_connection)" });
         return;
       }
       if (updates.name !== undefined && (typeof updates.name !== "string" || !updates.name.trim())) {
@@ -389,6 +443,8 @@ export async function handleAdminRequest(req: IncomingMessage, res: ServerRespon
       }
       const connErr = validateConnection(updates.connection);
       if (connErr) { sendJson(res, 400, { error: connErr }); return; }
+      const clientMode = parseClientConnectionMode(updates.client_connection);
+      if (!clientMode) { sendJson(res, 400, { error: CLIENT_MODE_ERROR }); return; }
       const store = loadTokenStore();
       const entry = store.tokens.find(t => t.id === id);
       if (!entry) { sendJson(res, 404, { error: "Not found" }); return; }
@@ -397,6 +453,10 @@ export async function handleAdminRequest(req: IncomingMessage, res: ServerRespon
       if (updates.active !== undefined) entry.active = !!updates.active;
       if (updates.connection !== undefined) {
         entry.connection = cleanConnection(mergeSecrets(updates.connection, entry.connection));
+      }
+      if (updates.client_connection !== undefined) {
+        if (clientMode === "none") delete entry.client_connection;
+        else entry.client_connection = clientMode;
       }
       saveTokenStore(store);
       onUpdate?.(before, entry);

@@ -65,6 +65,8 @@ services:
       ORA_PERF_TOOLS: "${ORA_PERF_TOOLS:-true}"
       ORA_DIAGNOSTICS_PACK: "${ORA_DIAGNOSTICS_PACK:-false}"
       ORA_TUNING_PACK: "${ORA_TUNING_PACK:-false}"
+      # X-Oracle-* headers of AUTH_TOKEN clients: none | credentials | full
+      ORA_CLIENT_CONNECTION: "${ORA_CLIENT_CONNECTION:-none}"
       # TNS_ADMIN is preset in the image to /opt/oracle/network/admin
 
     volumes:

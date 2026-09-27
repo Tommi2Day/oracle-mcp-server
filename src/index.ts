@@ -28,12 +28,12 @@ import { createRequire } from "node:module";
 import {
   readFileEnv, getAuthToken,
   checkAuth, checkAdminAuth, handleAdminRequest, migrateTokenStore, loadTokenStore,
-  log, isLogEnabled, getClientIp, getLogLevel,
+  log, isLogEnabled, getClientIp, getLogLevel, clientConnectionFromHeaders,
 } from "./lib.js";
 import {
   connectionFromEnv, mergeConnection, resolvePoolAttributes, describeConnection,
   getDriverMode, normalizeSql, resolveConnectString, trustedCaFile, firstKeyword, toIdentifier, perfFeatures,
-  sessionTags, programName,
+  sessionTags, programName, applyClientConnection, ClientConnectionError,
   type OraConnection, type PerfFeatures, type SessionContext,
 } from "./oracle.js";
 import { formatCell } from "./format.js";
@@ -146,12 +146,29 @@ export function getPool(connection: OraConnection | null): Promise<oracledb.Pool
   return p;
 }
 
-/** Close the pool of a removed/changed token unless another active token still uses it. */
+/** Pool key → number of open MCP sessions using it with a client-supplied connection. */
+export const clientPoolRefs = new Map<string, number>();
+
+function retainClientPool(key: string): void {
+  clientPoolRefs.set(key, (clientPoolRefs.get(key) ?? 0) + 1);
+}
+
+/** Called when a session with a client-supplied connection ends: closes the pool when
+ *  no other session and no token uses it (client credentials must not linger in pools). */
+function releaseClientPool(key: string, connection: OraConnection): void {
+  const n = (clientPoolRefs.get(key) ?? 1) - 1;
+  if (n > 0) { clientPoolRefs.set(key, n); return; }
+  clientPoolRefs.delete(key);
+  releasePool(connection);
+}
+
+/** Close the pool of a removed/changed token unless another active token or a
+ *  client-supplied session still uses it. */
 function releasePool(connection: OraConnection | null): void {
   if (!connection) return;
   let key: string;
   try { key = poolKey(connection); } catch { return; }
-  if (key === safePoolKey(null)) return;
+  if (key === safePoolKey(null) || clientPoolRefs.has(key)) return;
   const stillUsed = loadTokenStore().tokens.some(t => t.active && t.connection && safePoolKey(t.connection) === key);
   if (stillUsed) return;
   const p = poolCache.get(key);
@@ -514,6 +531,18 @@ function formatToolParams(args: Record<string, unknown>): string {
 
 // ── Session store (stateful HTTP sessions) ────────────────────────────────────
 export const sessions = new Map<string, StreamableHTTPServerTransport>();
+/** Client-supplied connection parameters per session (re-checked on every request). */
+const sessionClientConnections = new Map<string, OraConnection>();
+
+/** Logs (AUTH, like other rejected requests) and answers a rejected client-supplied connection
+ *  with a JSON-RPC error, which MCP clients show to the user. */
+function rejectClientConnection(req: http.IncomingMessage, res: http.ServerResponse, tokenName: string,
+  clientIp: string, err: unknown, status: number): void {
+  const message = (err as Error).message;
+  log("warn", "AUTH", `result="denied" token="${tokenName}" action="${req.method} /mcp" ip="${clientIp}" reason=${JSON.stringify(`client connection: ${message}`)}`);
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message }, id: null }));
+}
 
 // ── Request handler (shared by both HTTP and HTTPS) ───────────────────────────
 export async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -573,23 +602,58 @@ async function _handleRequest(req: http.IncomingMessage, res: http.ServerRespons
     const auth = await checkAuth(req, res);
     if (!auth.ok) return;
 
+    const clientIp = getClientIp(req);
     const sessionId = req.headers["mcp-session-id"];
     if (typeof sessionId === "string" && sessions.has(sessionId)) {
+      // The admin may have revoked the token's client_connection permission meanwhile
+      const client = sessionClientConnections.get(sessionId);
+      if (client) {
+        try {
+          applyClientConnection(auth.connection, client, auth.clientConnection);
+        } catch (err) {
+          rejectClientConnection(req, res, auth.name, clientIp, err, 403);
+          return;
+        }
+      }
       await sessions.get(sessionId)!.handleRequest(req, res);
     } else {
-      // New session — pool for this token is resolved lazily on the first tool call
-      const connection = auth.connection;
-      const clientIp = getClientIp(req);
+      // New session — pool for this token is resolved lazily on the first tool call.
+      // X-Oracle-* headers of the initialize request override the token's connection if permitted.
+      let connection = auth.connection;
+      let client: OraConnection | null = null;
+      let clientPoolKey: string | undefined;
+      try {
+        client = clientConnectionFromHeaders(req.headers);
+        if (client) {
+          connection = applyClientConnection(auth.connection, client, auth.clientConnection);
+          clientPoolKey = poolKey(connection);
+        }
+      } catch (err) {
+        rejectClientConnection(req, res, auth.name, clientIp, err, err instanceof ClientConnectionError ? err.status : 400);
+        return;
+      }
+      let connInfo = "";
+      if (client) {
+        const d = describeConnection(mergeConnection(connection, getDefaultConnection()), getDriverMode());
+        connInfo = ` connection="client" target="${d.connect_string}" user="${d.user ?? ""}"`;
+      }
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
           sessions.set(id, transport);
+          if (client && clientPoolKey) {
+            sessionClientConnections.set(id, client);
+            retainClientPool(clientPoolKey);
+          }
           const startedAt = Date.now();
-          log("info", "SESSION", `token="${auth.name}" action="start" session="${id}" ip="${clientIp}"`);
+          log("info", "SESSION", `token="${auth.name}" action="start" session="${id}" ip="${clientIp}"${connInfo}`);
           // Chain instead of overwrite: server.connect() already installed its own onclose
           const prevOnClose = transport.onclose;
           transport.onclose = () => {
             sessions.delete(id);
+            if (sessionClientConnections.delete(id) && clientPoolKey && connection) {
+              releaseClientPool(clientPoolKey, connection);
+            }
             const duration = Math.round((Date.now() - startedAt) / 1000);
             log("info", "SESSION", `token="${auth.name}" action="stop" session="${id}" ip="${clientIp}" duration=${duration}s`);
             prevOnClose?.();

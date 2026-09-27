@@ -15,6 +15,7 @@
 #   ./admincli.sh rename-token  <id> <new-name>
 #   ./admincli.sh set-conn     <id> '<json>'   # set per-token DB connection
 #   ./admincli.sh clear-conn   <id>            # reset to default admin connection
+#   ./admincli.sh set-client-conn <id> none|credentials|full   # client may send X-Oracle-* headers
 #   ./admincli.sh health                        # server health check
 set -eo pipefail
 
@@ -201,7 +202,7 @@ cmd_add_token() {
   # Flags take precedence over ORA_* env vars
   local host="${ORA_HOST:-}" port="${ORA_PORT:-}" service="${ORA_SERVICE_NAME:-}" sid="${ORA_SID:-}"
   local protocol="${ORA_PROTOCOL:-}" alias="${ORA_TNS_ALIAS:-}" cs="${ORA_CONNECT_STRING:-}"
-  local user="${ORA_USER:-}" pass="${ORA_PASSWORD:-}" tnsadmin="" wallet="" walletpw="" diag="" tuning=""
+  local user="${ORA_USER:-}" pass="${ORA_PASSWORD:-}" tnsadmin="" wallet="" walletpw="" diag="" tuning="" client=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --host)            host="$2";     shift 2 ;;
@@ -218,6 +219,7 @@ cmd_add_token() {
       --wallet-password) walletpw="$2"; shift 2 ;;
       --diagnostics-pack) diag="$2";    shift 2 ;;
       --tuning-pack)     tuning="$2";   shift 2 ;;
+      --client-connection) client="$2"; shift 2 ;;
       *) die "Unknown option: $1" ;;
     esac
   done
@@ -249,8 +251,15 @@ cmd_add_token() {
     conn_json=",\"connection\": {${fields[*]}}"
   fi
 
+  local client_json=""
+  case "$client" in
+    none|credentials|full) client_json=",\"client_connection\": \"$client\"" ;;
+    "") ;;
+    *) die "--client-connection must be none, credentials or full" ;;
+  esac
+
   local raw body
-  raw=$(api POST "$API" -d "{\"name\":$(json_str "$name")${conn_json}}")
+  raw=$(api POST "$API" -d "{\"name\":$(json_str "$name")${conn_json}${client_json}}")
   body=$(check_response "$raw")
 
   local token
@@ -270,6 +279,10 @@ cmd_add_token() {
   echo ""
   if [ -n "$conn_json" ]; then
     echo "   Connection: ${target:-(server default target)} (user: ${user:-(default)})"
+    echo ""
+  fi
+  if [ -n "$client" ] && [ "$client" != "none" ]; then
+    echo "   Client-supplied connection: ${client} (X-Oracle-* headers)"
     echo ""
   fi
 }
@@ -343,6 +356,21 @@ cmd_clear_conn() {
   echo "✅ Token ${id} connection cleared (uses default admin connection)."
 }
 
+cmd_set_client_conn() {
+  require_token
+  case "${2:-}" in
+    none|credentials|full) ;;
+    *) die "Usage: ./admincli.sh set-client-conn <id> none|credentials|full" ;;
+  esac
+  [ -n "${1:-}" ] || die "Usage: ./admincli.sh set-client-conn <id> none|credentials|full"
+  local id="$1" mode="$2"
+
+  local raw body
+  raw=$(api PATCH "${API}/${id}" -d "{\"client_connection\":\"${mode}\"}")
+  body=$(check_response "$raw")
+  echo "✅ Token ${id}: client-supplied connection = ${mode}."
+}
+
 cmd_help() {
   cat <<EOF
 
@@ -369,6 +397,9 @@ oracle-mcp-server admin CLI
                [--wallet DIR] [--wallet-password P]
                [--diagnostics-pack true|false]   licensed → ASH/AWR tools (default: server setting)
                [--tuning-pack true|false]        licensed → SQL Monitor tool (default: server setting)
+               [--client-connection none|credentials|full]
+                                      client may send its own user/password (credentials) or
+                                      also the target (full) as X-Oracle-* headers (default: none)
     delete-token <id>            Permanently delete a token
     enable-token <id>            Re-enable a token
     disable-token <id>           Temporarily disable a token
@@ -376,6 +407,8 @@ oracle-mcp-server admin CLI
     set-conn     <id> '<json>'   Set a custom DB connection for a token (omitted password is kept)
                                  JSON: {"tns_alias":"PROD","user":"u","password":"p"}
     clear-conn   <id>            Clear per-token connection (falls back to default connection)
+    set-client-conn <id> none|credentials|full
+                                 What the token's clients may set via X-Oracle-* headers
 
   Examples:
     export AUTH_TOKEN=<admin-token>
@@ -399,6 +432,10 @@ oracle-mcp-server admin CLI
     # Reset to default connection
     ./admincli.sh clear-conn 2
 
+    # Clients log in with their own database account (X-Oracle-User / X-Oracle-Password)
+    ./admincli.sh add-token "analysts" --client-connection credentials
+    ./admincli.sh set-client-conn 2 full
+
 EOF
 }
 
@@ -413,6 +450,7 @@ case "${1:-help}" in
   rename-token)  cmd_rename_token  "${2:-}" "${3:-}" ;;
   set-conn)      cmd_set_conn      "${2:-}" "${3:-}" ;;
   clear-conn)    cmd_clear_conn    "${2:-}" ;;
+  set-client-conn) cmd_set_client_conn "${2:-}" "${3:-}" ;;
   health)        cmd_health ;;
   help|--help|-h) cmd_help ;;
   *) die "Unknown command: ${1}\nHelp: ./admincli.sh help" ;;

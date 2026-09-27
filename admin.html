@@ -366,6 +366,7 @@
     .conn-label svg { width: 13px; height: 13px; flex-shrink: 0; }
     .conn-default { color: var(--text-faint); }
     .conn-custom  { color: var(--primary); font-weight: 500; }
+    .client-conn  { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
 
     /* ─── Date cell ─────────────────────────────────────────────────────── */
     .date-text { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
@@ -863,7 +864,7 @@ function renderTokens() {
       <td class="col-status">
         <span class="badge ${t.active ? 'badge-on' : 'badge-off'}">${t.active ? 'Active' : 'Inactive'}</span>
       </td>
-      <td class="col-conn hide-sm">${renderConn(t.connection)}</td>
+      <td class="col-conn hide-sm">${renderConn(t.connection)}${renderClientConn(t.client_connection)}</td>
       <td class="col-date hide-sm"><span class="date-text">${fmtDate(t.created_at)}</span></td>
       <td class="col-date hide-sm">${t.last_used_at
         ? `<span class="date-text">${fmtDate(t.last_used_at)}</span>`
@@ -919,6 +920,18 @@ function renderConn(conn) {
     </span>`;
 }
 
+const CLIENT_CONN_LABELS = {
+  none:        'Not allowed – token connection only',
+  credentials: 'Credentials – client may send user / password',
+  full:        'Full – client may also choose host / alias / connect string',
+};
+
+/** Marker below the connection when clients may send their own connection parameters. */
+function renderClientConn(mode) {
+  if (!mode || mode === 'none') return '';
+  return `<div class="client-conn" title="${x(CLIENT_CONN_LABELS[mode] || mode)}">client: ${x(mode)}</div>`;
+}
+
 // ── Create ────────────────────────────────────────────────────────────────────
 function openCreateModal() {
   showModal('New Token', buildForm(null), [
@@ -936,7 +949,7 @@ async function submitCreate() {
   btn.disabled = true; btn.textContent = 'Creating…';
 
   try {
-    const created = await api('POST', '/admin/tokens', { name, connection: conn });
+    const created = await api('POST', '/admin/tokens', { name, connection: conn, client_connection: readClientConn() });
     state.tokens.unshift({ ...created });
     renderTokens();
     showTokenReveal(created);
@@ -1001,7 +1014,8 @@ async function submitEdit(id) {
   btn.disabled = true; btn.textContent = 'Saving…';
 
   try {
-    const updated = await api('PATCH', `/admin/tokens/${id}`, { name, active, connection: conn });
+    const updated = await api('PATCH', `/admin/tokens/${id}`,
+      { name, active, connection: conn, client_connection: readClientConn() });
     const idx = state.tokens.findIndex(t => t.id === id);
     if (idx >= 0) Object.assign(state.tokens[idx], updated);
     renderTokens();
@@ -1070,6 +1084,12 @@ function buildForm(t) {
         Active
       </label>
     </div>` : ''}
+
+    <div class="field">
+      <label for="f-clientconn">Client-supplied connection
+        <span style="font-weight:400;color:var(--text-muted)">(X-Oracle-* headers)</span></label>
+      <select id="f-clientconn">${clientConnOptions(t && t.client_connection)}</select>
+    </div>
 
     <hr class="divider">
 
@@ -1184,6 +1204,16 @@ function packOptions(value) {
     ['true', 'Licensed – enable tools'],
     ['false', 'Not licensed – disable tools'],
   ].map(([val, label]) => `<option value="${val}" ${v === val ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+function clientConnOptions(value) {
+  const v = value || 'none';
+  return Object.entries(CLIENT_CONN_LABELS)
+    .map(([val, label]) => `<option value="${val}" ${v === val ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+function readClientConn() {
+  return document.getElementById('f-clientconn').value;
 }
 
 function switchConnType() {

@@ -39,8 +39,8 @@ Pairs are separated by a single space. Values are enclosed in double quotes, exc
 |----------|-------|----------------------|---------|
 | `MCP` | info | `token` `action` `ip` [`params`] | Tool call. `action` = tool name. `params` is omitted for tools without arguments; `params.sql` is replaced by `<N chars, LOG_LEVEL=debug to show>` unless `LOG_LEVEL=debug` |
 | `MCP` | error | `token` `action` `ip` `error` | Tool call failed |
-| `SESSION` | info | `token` `action` `session` `ip` [`duration`] | `action` = `start` \| `stop`; `duration` only on `stop` |
-| `AUTH` | warn | `result` [`token`] `action` `ip` `reason` | Rejected request (HTTP 401). `result` = `denied`; `action` = `<METHOD> <path>`; `reason` = `missing token` \| `invalid admin token` \| `unknown token` \| `token disabled` (only the last one has `token`). The presented token is never logged |
+| `SESSION` | info | `token` `action` `session` `ip` [`connection` `target` `user`] [`duration`] | `action` = `start` \| `stop`; `duration` only on `stop`; `connection="client"` with `target` / `user` on `start` when the client supplied its own connection parameters (X-Oracle-* headers) |
+| `AUTH` | warn | `result` [`token`] `action` `ip` `reason` | Rejected request (HTTP 401). `result` = `denied`; `action` = `<METHOD> <path>`; `reason` = `missing token` \| `invalid admin token` \| `unknown token` \| `token disabled` (only the last one has `token`), or `client connection: <message>` for rejected X-Oracle-* headers (HTTP 400/403, with `token`). The presented token is never logged |
 | `ADMIN` | info | `token` `action` `ip` | Admin API call; `token` = `admin` or `anonymous` (auth disabled) |
 | `ADMIN` | error | `token` `action` `ip` `error` | Admin API call failed |
 

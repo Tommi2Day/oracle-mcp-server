@@ -179,6 +179,8 @@ spec:
               value: {{ .Values.oracle.diagnosticsPack | default false | toString | quote }}
             - name: ORA_TUNING_PACK
               value: {{ .Values.oracle.tuningPack | default false | toString | quote }}
+            - name: ORA_CLIENT_CONNECTION
+              value: {{ .Values.oracle.clientConnection | default "none" | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

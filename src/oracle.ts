@@ -277,6 +277,77 @@ export function mergeConnection(token: OraConnection | null | undefined, base: O
   return merged;
 }
 
+// ── Client-supplied connections ─────────────────────────────────────────────
+/** What an MCP client may set itself (token field `client_connection`, ORA_CLIENT_CONNECTION):
+ *  none – nothing; credentials – user/password; full – also the target (host, alias, connect string). */
+export type ClientConnectionMode = "none" | "credentials" | "full";
+export const CLIENT_CONNECTION_MODES: readonly ClientConnectionMode[] = ["none", "credentials", "full"];
+
+/** Fields a client may set per mode. Server-side files (tns_admin, wallets) and the licence
+ *  switches (diagnostics_pack, tuning_pack) are never accepted from a client. */
+export const CLIENT_CREDENTIAL_FIELDS = ["user", "password"] as const;
+export const CLIENT_TARGET_FIELDS = [
+  "connect_string", "tns_alias", "host", "port", "service_name", "sid", "protocol",
+  "ssl_server_dn_match", "ssl_server_cert_dn",
+] as const;
+
+/** Connect string parameters that would make the server read local files (wallets, *.ora). */
+const CLIENT_FORBIDDEN_CS = /wallet|tns_admin|config_dir|my_wallet_directory/i;
+
+export class ClientConnectionError extends Error {
+  constructor(message: string, readonly status: 400 | 403) { super(message); }
+}
+
+/** Parses a client_connection value; undefined/null/"" → "none", invalid → null. */
+export function parseClientConnectionMode(v: unknown): ClientConnectionMode | null {
+  if (v === undefined || v === null || v === "") return "none";
+  const m = String(v).trim().toLowerCase();
+  return (CLIENT_CONNECTION_MODES as readonly string[]).includes(m) ? m as ClientConnectionMode : null;
+}
+
+/**
+ * Applies connection parameters sent by an MCP client on top of the token's connection
+ * (null = server default). Throws ClientConnectionError (403 not permitted, 400 invalid).
+ * Rules: credentials come as user + password pair and never mix with the token's; a client
+ * target requires client credentials, so the token's or server's password is never sent to a
+ * host chosen by the client. TLS pinning of the token is dropped with its target.
+ */
+export function applyClientConnection(token: OraConnection | null, client: OraConnection,
+  mode: ClientConnectionMode): OraConnection | null {
+  const c = extractJdbcCredentials(client);
+  const keys = Object.keys(c).filter(k => nonEmpty((c as Record<string, unknown>)[k]) !== undefined);
+  if (!keys.length) return token;
+  if (mode === "none") {
+    throw new ClientConnectionError("This token does not allow client-supplied connection parameters", 403);
+  }
+  const allowed: readonly string[] = mode === "full"
+    ? [...CLIENT_CREDENTIAL_FIELDS, ...CLIENT_TARGET_FIELDS] : CLIENT_CREDENTIAL_FIELDS;
+  const denied = keys.filter(k => !allowed.includes(k));
+  if (denied.length) {
+    throw new ClientConnectionError(`Not allowed for this token (client_connection=${mode}): ${denied.join(", ")}`, 403);
+  }
+  if (nonEmpty(c.connect_string) && CLIENT_FORBIDDEN_CS.test(c.connect_string!)) {
+    throw new ClientConnectionError("Connect string must not reference wallets or TNS_ADMIN directories", 400);
+  }
+  const hasUser = !!nonEmpty(c.user);
+  if (hasUser !== !!c.password) throw new ClientConnectionError("user and password must be supplied together", 400);
+  const hasTarget = TARGET_KEYS.some(k => nonEmpty(c[k]));
+  if (!hasTarget && keys.some(k => k !== "user" && k !== "password")) {
+    throw new ClientConnectionError("Target fields require connect_string, tns_alias or host", 400);
+  }
+  if (hasTarget && !hasUser) {
+    throw new ClientConnectionError("A client-supplied target requires user and password", 400);
+  }
+
+  const out: OraConnection = { ...(token ?? {}) };
+  if (hasUser) { delete out.user; delete out.password; }
+  if (hasTarget) {
+    for (const k of CLIENT_TARGET_FIELDS) delete out[k];
+  }
+  for (const k of keys) (out as Record<string, unknown>)[k] = (c as Record<string, unknown>)[k];
+  return out;
+}
+
 /** Final connect string for a (merged) connection, plus credentials/configDir found in a JDBC URL. */
 export function resolveConnectString(c: OraConnection): ParsedConnectString {
   const cs = nonEmpty(c.connect_string);

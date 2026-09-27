@@ -45,10 +45,11 @@ vi.mock("@modelcontextprotocol/sdk/types.js", () => ({
   CallToolRequestSchema: "CALL_TOOL",
 }));
 
-vi.mock("../src/lib.js", () => ({
+vi.mock("../src/lib.js", async () => ({
+  clientConnectionFromHeaders: (await vi.importActual<typeof import("../src/lib.js")>("../src/lib.js")).clientConnectionFromHeaders,
   readFileEnv: vi.fn(),
   getAuthToken: vi.fn(() => ""),
-  checkAuth: vi.fn().mockResolvedValue({ ok: true, name: "admin", connection: null }),
+  checkAuth: vi.fn().mockResolvedValue({ ok: true, name: "admin", connection: null, clientConnection: "none" }),
   checkAdminAuth: vi.fn(() => true),
   handleAdminRequest: vi.fn().mockResolvedValue(undefined),
   migrateTokenStore: vi.fn(),
@@ -64,6 +65,7 @@ import {
   toIdentifier, isReadOnlyStatement, formatCell, formatOracleType, featuresFor,
 } from "../src/index.js";
 import { checkAuth, handleAdminRequest, log } from "../src/lib.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 async function callTool(name: string, args: Record<string, unknown> = {}) {
   createMcpServer(async () => mockPool as any, "tester", "1.2.3.4");
@@ -85,7 +87,7 @@ afterEach(async () => {
   createPool.mockClear();
   await closeAllPools();
   sessions.clear();
-  vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "admin", connection: null });
+  vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "admin", connection: null, clientConnection: "none" });
 });
 
 // ── getPool ───────────────────────────────────────────────────────────────────
@@ -386,6 +388,68 @@ describe("handleRequest", () => {
     mockTransport.handleRequest.mockClear();
     await handleRequest(makeReq("POST", "/mcp"), makeRes());
     expect(mockTransport.handleRequest).toHaveBeenCalledTimes(1);
+  });
+
+  describe("client-supplied connection (X-Oracle-* headers)", () => {
+    const clientHeaders = { "x-oracle-user": "scott", "x-oracle-password": "tiger" };
+    /** Simulates the SDK: initialize → session id, returns the transport's onclose. */
+    function initSession(id: string): () => void {
+      const opts = vi.mocked(StreamableHTTPServerTransport).mock.calls.at(-1)![0] as any;
+      opts.onsessioninitialized(id);
+      return mockTransport.onclose as unknown as () => void;
+    }
+
+    beforeEach(() => {
+      mockTransport.handleRequest.mockClear();
+      (mockTransport as any).onclose = undefined;
+    });
+
+    it("rejects client parameters when the token does not allow them (403)", async () => {
+      const res = makeRes();
+      await handleRequest(makeReq("POST", "/mcp", { headers: clientHeaders }), res);
+      expect(res.writeHead).toHaveBeenCalledWith(403, expect.any(Object));
+      expect(resBody(res).error.message).toMatch(/does not allow/);
+      expect(mockTransport.handleRequest).not.toHaveBeenCalled();
+    });
+
+    it("rejects invalid headers (400)", async () => {
+      vi.mocked(checkAuth).mockResolvedValueOnce({ ok: true, name: "t", connection: null, clientConnection: "full" });
+      const res = makeRes();
+      await handleRequest(makeReq("POST", "/mcp", { headers: { "x-oracle-host": "evil", "x-oracle-wallet-location": "/x" } }), res);
+      expect(res.writeHead).toHaveBeenCalledWith(400, expect.any(Object));
+    });
+
+    it("uses the client credentials, logs the target and closes the pool with the session", async () => {
+      vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "t", connection: null, clientConnection: "credentials" });
+      await handleRequest(makeReq("POST", "/mcp", { headers: clientHeaders }), makeRes());
+      expect(mockTransport.handleRequest).toHaveBeenCalledTimes(1);
+      const onclose = initSession("s1");
+      expect(vi.mocked(log)).toHaveBeenCalledWith("info", "SESSION",
+        expect.stringContaining('connection="client" target="dbhost:1521/FREEPDB1" user="scott"'));
+
+      await capturedHandlers.CALL_TOOL({ params: { name: "list_schemas", arguments: {} } }).catch(() => {});
+      expect(createPool).toHaveBeenCalledWith(expect.objectContaining({ user: "scott", password: "tiger", connectString: "dbhost:1521/FREEPDB1" }));
+
+      // Later requests of the session are re-checked against the token's current permission
+      sessions.set("s1", mockTransport as any);
+      vi.mocked(checkAuth).mockResolvedValueOnce({ ok: true, name: "t", connection: null, clientConnection: "none" });
+      const res = makeRes();
+      await handleRequest(makeReq("POST", "/mcp", { headers: { "mcp-session-id": "s1" } }), res);
+      expect(res.writeHead).toHaveBeenCalledWith(403, expect.any(Object));
+
+      onclose();
+      await Promise.resolve();
+      expect(mockPool.close).toHaveBeenCalled();
+      expect(poolCache.size).toBe(0);
+    });
+
+    it("full mode lets the client choose the target", async () => {
+      vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "t", connection: { tns_alias: "PROD", user: "u", password: "p" }, clientConnection: "full" });
+      await handleRequest(makeReq("POST", "/mcp", { headers: { ...clientHeaders, "x-oracle-host": "db2", "x-oracle-service-name": "S2" } }), makeRes());
+      initSession("s2");
+      await capturedHandlers.CALL_TOOL({ params: { name: "list_schemas", arguments: {} } }).catch(() => {});
+      expect(createPool).toHaveBeenCalledWith(expect.objectContaining({ user: "scott", connectString: "db2:1521/S2" }));
+    });
   });
 
   it("unknown paths return 404", async () => {

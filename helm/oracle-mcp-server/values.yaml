@@ -60,6 +60,10 @@ oracle:
   perfTools: true
   diagnosticsPack: false
   tuningPack: false
+  # Connection parameters clients of the admin token (auth.token) may send as X-Oracle-*
+  # headers: none | credentials (user/password) | full (also the target). File tokens
+  # have their own client_connection setting.
+  clientConnection: none
 
 # ── Oracle client configuration (TNS_ADMIN) ───────────────────────────────────
 # tnsnames.ora, sqlnet.ora and wallet files are mounted read-only at mountPath,

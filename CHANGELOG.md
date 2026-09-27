@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Client-supplied connections: a token's `client_connection` (`none` default, `credentials`, `full`) lets its MCP
+  clients send their own database user/password — and with `full` the target — as `X-Oracle-*` headers on the
+  `initialize` request. A client target requires client credentials; wallets/`TNS_ADMIN` cannot be referenced;
+  the permission is re-checked on every request; such sessions get their own pool, closed with the last session.
+  `ORA_CLIENT_CONNECTION` for the admin token; admin UI, REST API (`openapi.json`), `admincli.sh`
+  (`--client-connection`, `set-client-conn`), Helm `oracle.clientConnection`.
 - Admin UI branding: `ADMIN_LOGO` (logo file or URL) replaces the icon, `ADMIN_THEME_CSS` loads a stylesheet that
   overrides the color/font variables; all colors of `admin.html` are now CSS variables. Example theme in
   `examples/admin-theme/`, screenshots in the README; Helm values `adminUi.brandingConfigMap` / `themeCss` / `logo`.

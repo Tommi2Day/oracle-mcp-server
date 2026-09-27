@@ -51,6 +51,14 @@ Target precedence: `connect_string` > `tns_alias` > `host`. `mergeConnection`: a
 field takes the whole target from the token (never mixes with default host fields); `user/password` fall back
 to the default only if the token sets no user; `tns_admin`/wallet/TLS fields fall back individually.
 
+### Client-supplied connections
+
+Token field `client_connection` (`none`|`credentials`|`full`; admin/anonymous: `ORA_CLIENT_CONNECTION`) permits
+`X-Oracle-*` headers on the MCP `initialize` request (`clientConnectionFromHeaders` in `lib.ts`,
+`applyClientConnection` in `oracle.ts`). Never accept server-side paths (`tns_admin`, wallets) or licence switches
+from clients, and never send token/default credentials to a client-chosen target. The permission is re-checked per
+request (`sessionClientConnections`); client pools are ref-counted (`clientPoolRefs`) and closed with the last session.
+
 ### Pools
 
 `getPool(connection)` returns a promise of an `oracledb.Pool`, cached by SHA-256 of `{attrs, caFile}` —

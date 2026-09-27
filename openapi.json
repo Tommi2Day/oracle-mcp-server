@@ -144,6 +144,9 @@
               }
             ],
             "description": "Custom Oracle connection for this token, or null to use the server default."
+          },
+          "client_connection": {
+            "$ref": "#/components/schemas/ClientConnectionMode"
           }
         }
       },
@@ -154,6 +157,16 @@
             "type": "string"
           }
         }
+      },
+      "ClientConnectionMode": {
+        "type": "string",
+        "enum": [
+          "none",
+          "credentials",
+          "full"
+        ],
+        "default": "none",
+        "description": "What MCP clients of this token may set themselves via X-Oracle-* headers on the initialize request: none – nothing (token/server connection only); credentials – X-Oracle-User and X-Oracle-Password; full – additionally the target (X-Oracle-Connect-String, X-Oracle-Tns-Alias, X-Oracle-Host, X-Oracle-Port, X-Oracle-Service-Name, X-Oracle-Sid, X-Oracle-Protocol, X-Oracle-Ssl-Server-Dn-Match, X-Oracle-Ssl-Server-Cert-Dn). A client-supplied target always requires client credentials."
       }
     }
   },
@@ -196,7 +209,7 @@
     "/mcp": {
       "post": {
         "summary": "MCP Streamable-HTTP endpoint",
-        "description": "MCP protocol transport. Requires a Bearer token (admin or file token). When the token has a custom connection configured, that Oracle database is used for this session; otherwise the server default is used. Multi-step protocol: send `initialize` first, then `notifications/initialized`, then tool calls. Include the `mcp-session-id` header returned from `initialize` in subsequent requests.",
+        "description": "MCP protocol transport. Requires a Bearer token (admin or file token). When the token has a custom connection configured, that Oracle database is used for this session; otherwise the server default is used. Multi-step protocol: send `initialize` first, then `notifications/initialized`, then tool calls. Include the `mcp-session-id` header returned from `initialize` in subsequent requests. If the token's client_connection permits it, the client may send its own connection parameters as X-Oracle-* headers with the initialize request (see ClientConnectionMode); they apply to the whole session and are re-checked against the token on every request.",
         "operationId": "mcpRequest",
         "security": [
           {
@@ -212,6 +225,105 @@
             "in": "header",
             "required": false,
             "description": "Session ID returned by the server after initialize. Include in all follow-up requests.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-User",
+            "in": "header",
+            "required": false,
+            "description": "Client-supplied database user (client_connection credentials or full). Requires X-Oracle-Password.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Password",
+            "in": "header",
+            "required": false,
+            "description": "Password for X-Oracle-User. Use HTTPS.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Connect-String",
+            "in": "header",
+            "required": false,
+            "description": "Client-supplied target (client_connection full): Easy Connect, descriptor or JDBC URL. References to wallets / TNS_ADMIN are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Tns-Alias",
+            "in": "header",
+            "required": false,
+            "description": "Client-supplied target (full): alias from the server's tnsnames.ora.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Host",
+            "in": "header",
+            "required": false,
+            "description": "Client-supplied target (full): host, with X-Oracle-Port, X-Oracle-Service-Name or X-Oracle-Sid, X-Oracle-Protocol (tcp|tcps).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Port",
+            "in": "header",
+            "required": false,
+            "description": "Port for X-Oracle-Host (default 1521).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Service-Name",
+            "in": "header",
+            "required": false,
+            "description": "Service name for X-Oracle-Host.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Sid",
+            "in": "header",
+            "required": false,
+            "description": "SID for X-Oracle-Host (instead of the service name).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Protocol",
+            "in": "header",
+            "required": false,
+            "description": "tcp or tcps for X-Oracle-Host.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Ssl-Server-Dn-Match",
+            "in": "header",
+            "required": false,
+            "description": "true/false: check the server certificate (TCPS).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Oracle-Ssl-Server-Cert-Dn",
+            "in": "header",
+            "required": false,
+            "description": "Expected server certificate DN (TCPS).",
             "schema": {
               "type": "string"
             }
@@ -286,10 +398,13 @@
             "description": "Missing or invalid Bearer token"
           },
           "403": {
-            "description": "Token not authorized for this endpoint"
+            "description": "X-Oracle-* headers not permitted by the token's client_connection (JSON-RPC error body)"
           },
           "503": {
             "description": "AUTH_TOKEN not configured on the server"
+          },
+          "400": {
+            "description": "Invalid X-Oracle-* header (unknown header, invalid value, user without password, target without credentials); JSON-RPC error body"
           }
         }
       }
@@ -360,6 +475,9 @@
                       }
                     ],
                     "description": "Optional Oracle connection for this token. Omit or set null to use the server default."
+                  },
+                  "client_connection": {
+                    "$ref": "#/components/schemas/ClientConnectionMode"
                   }
                 },
                 "required": [
@@ -432,7 +550,7 @@
       ],
       "patch": {
         "summary": "Update a token",
-        "description": "Updates one or more of name, active, or connection. At least one field must be provided. Set connection to null to clear a custom connection and fall back to the server default.",
+        "description": "Updates one or more of name, active, connection or client_connection. At least one field must be provided. Set connection to null to clear a custom connection and fall back to the server default.",
         "operationId": "updateToken",
         "security": [
           {
@@ -462,6 +580,9 @@
                       }
                     ],
                     "description": "Set a custom connection, update it, or pass null to clear it."
+                  },
+                  "client_connection": {
+                    "$ref": "#/components/schemas/ClientConnectionMode"
                   }
                 }
               },

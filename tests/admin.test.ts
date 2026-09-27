@@ -99,6 +99,25 @@ describe("handleAdminRequest", () => {
       expect.objectContaining({ connection: { host: "new", user: "u", password: "pw" } }));
   });
 
+  it("stores client_connection on create and PATCH, rejects invalid values", async () => {
+    let res = makeRes();
+    await handleAdminRequest(makeReq("POST", "/admin/tokens", { body: JSON.stringify({ name: "c", client_connection: "full" }) }), res);
+    expect(resBody(res)).toMatchObject({ name: "c", client_connection: "full" });
+    expect(writtenStore().tokens[0].client_connection).toBe("full");
+
+    res = makeRes();
+    await handleAdminRequest(makeReq("POST", "/admin/tokens", { body: JSON.stringify({ name: "c", client_connection: "all" }) }), res);
+    expect(res.writeHead).toHaveBeenCalledWith(400, expect.any(Object));
+
+    mockWriteFile.mockClear();
+    clearTokenStoreCache();
+    seedStore([makeToken({ client_connection: "full" })]);
+    res = makeRes();
+    await handleAdminRequest(makeReq("PATCH", "/admin/tokens/1", { body: JSON.stringify({ client_connection: "none" }) }), res);
+    expect(res.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+    expect(writtenStore().tokens[0]).not.toHaveProperty("client_connection");
+  });
+
   it("PATCH with connection null resets to default", async () => {
     seedStore([makeToken({ connection: { host: "old" } })]);
     const res = makeRes();
