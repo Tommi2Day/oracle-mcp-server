@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-28
+
 ### Changed
 
 - Docker image based on Debian 13 (`node:25-trixie-slim`) instead of Debian 12: critical CVEs of the base image
@@ -22,6 +24,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Admin UI keyboard accessibility (Sonar S1082): Escape closes dialogs via a key handler on the dialog backdrop (the
   dialog gets the focus when it has no input field, e.g. the delete confirmation); "Use default connection" is a
   focusable button that toggles with Enter/Space
+- `npm version` updates `openapi.json` and the Helm chart version again (the lifecycle script had an unescaped
+  newline)
 
 ## [0.3.0] - 2026-09-27
 
