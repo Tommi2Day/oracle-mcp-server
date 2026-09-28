@@ -130,7 +130,7 @@ export function parseConnectString(raw: string): ParsedConnectString {
 
   const sid = s.match(HOST_PORT_SID);
   if (sid) {
-    s = buildDescriptor("tcp", sid[1].replace(/^\[|\]$/g, ""), sid[2], { sid: sid[3] });
+    s = buildDescriptor("tcp", sid[1].replace(/(?:^\[)|(?:\]$)/g, ""), sid[2], { sid: sid[3] });
   }
 
   result.connectString = s;

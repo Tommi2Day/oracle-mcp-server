@@ -454,16 +454,7 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
                 await conn.rollback();
                 res = await run();
               }
-              const rows = res.rows ?? [];
-              if (!rows.length) return text("Query returned 0 rows.");
-              const cols = (res.metaData ?? []).map(m => m.name);
-              const types = (res.metaData ?? []).map(m => m.dbTypeName);
-              const header = cols.join(" | ");
-              const body = rows.slice(0, MAX_ROWS).map(r => r.map((v, i) => formatCell(v, types[i])).join(" | "));
-              const note = rows.length > MAX_ROWS
-                ? `\n(showing first ${MAX_ROWS} rows, more available)`
-                : `\n(${rows.length} row${rows.length !== 1 ? "s" : ""})`;
-              return text(`${header}\n${"─".repeat(Math.min(header.length, 120))}\n${body.join("\n")}${note}`);
+              return text(formatQueryResult(res));
             } finally {
               await conn.rollback().catch(() => {});
             }
@@ -503,6 +494,21 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
   });
 
   return server;
+}
+
+/** Result of the query tool as a " | "-separated text table, limited to MAX_ROWS rows. */
+function formatQueryResult(res: oracledb.Result<unknown[]>): string {
+  const rows = res.rows ?? [];
+  if (!rows.length) return "Query returned 0 rows.";
+  const cols = (res.metaData ?? []).map(m => m.name);
+  const types = (res.metaData ?? []).map(m => m.dbTypeName);
+  const header = cols.join(" | ");
+  const formatRow = (r: unknown[]) => r.map((v, i) => formatCell(v, types[i])).join(" | ");
+  const body = rows.slice(0, MAX_ROWS).map(formatRow);
+  const note = rows.length > MAX_ROWS
+    ? `\n(showing first ${MAX_ROWS} rows, more available)`
+    : `\n(${rows.length} row${rows.length === 1 ? "" : "s"})`;
+  return `${header}\n${"─".repeat(Math.min(header.length, 120))}\n${body.join("\n")}${note}`;
 }
 
 /** Oracle column type as shown in SQL*Plus DESCRIBE. */
