@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `npm run ci:test` also writes `coverage/lcov.info` (coverage of `src/`), so SonarQube picks up the test coverage
   instead of reporting 0%
 
+### Fixed
+
+- Admin UI keyboard accessibility (Sonar S1082): Escape closes dialogs via a key handler on the dialog backdrop (the
+  dialog gets the focus when it has no input field, e.g. the delete confirmation); "Use default connection" is a
+  focusable button that toggles with Enter/Space
+
 ## [0.3.0] - 2026-09-27
 
 ### Added
