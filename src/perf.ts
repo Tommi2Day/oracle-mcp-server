@@ -478,11 +478,22 @@ async function awrSnapshots(conn: oracledb.Connection, prefix: string, hours: nu
   return all.filter(r => r.DBID === usable);
 }
 
+type AwrSource = (typeof AWR_SOURCES)[number];
+
 async function awrTopEvents(conn: oracledb.Connection, args: Args): Promise<string> {
   const hours = Math.min(Math.max(Number(args.hours ?? 24) || 24, 1), 720);
   const n = limitArg(args.limit, 10);
+  const { snaps, source } = await findAwrSnapshots(conn, hours);
+  if (!snaps.length) return `No AWR snapshots in the last ${hours} hours.` + await packAccessNote(conn, "DIAGNOSTIC");
+  const out: string[] = [];
+  for (const s of snaps) out.push(await awrInstanceEvents(conn, s, source, n));
+  return out.join("\n\n");
+}
+
+/** Snapshots from DBA_HIST_*, else from AWR_ROOT_* (CDB root data seen from a PDB). */
+async function findAwrSnapshots(conn: oracledb.Connection, hours: number): Promise<{ snaps: Row[]; source: AwrSource }> {
   let snaps: Row[] = [];
-  let source: (typeof AWR_SOURCES)[number] = AWR_SOURCES[0];
+  let source: AwrSource = AWR_SOURCES[0];
   for (const src of AWR_SOURCES) {
     try {
       snaps = await awrSnapshots(conn, src.prefix, hours);
@@ -494,55 +505,54 @@ async function awrTopEvents(conn: oracledb.Connection, args: Args): Promise<stri
     source = src;
     if (snaps.length) break;
   }
-  if (!snaps.length) return `No AWR snapshots in the last ${hours} hours.` + await packAccessNote(conn, "DIAGNOSTIC");
+  return { snaps, source };
+}
+
+/** Top wait events (plus DB CPU) of one instance between its first and last snapshot in the window. */
+async function awrInstanceEvents(conn: oracledb.Connection, s: Row, source: AwrSource, n: number): Promise<string> {
   const p = source.prefix;
-  const out: string[] = [];
-  for (const s of snaps) {
-    const scope = source.label || (Number(s.OWN) === 1 ? "" : " – CDB root AWR data");
-    const label = `Instance ${s.INSTANCE_NUMBER} (dbid ${s.DBID}), snapshots ${s.B}–${s.E} (${s.T_BEGIN} – ${s.T_END})${scope}`;
-    if (s.B === s.E) { out.push(`${label}: only one snapshot in the window.`); continue; }
-    if (Number(s.STARTUPS) > 1) { out.push(`${label}: instance restarted within the window — use a shorter window.`); continue; }
-    const binds = { dbid: s.DBID as number, inst: s.INSTANCE_NUMBER as number, b: s.B as number, e: s.E as number };
-    const tm = await rows(conn,
-      `SELECT e.stat_name, ROUND((e.value - b.value) / 1e6, 1) AS seconds
-       FROM ${p}_sys_time_model b
-       JOIN ${p}_sys_time_model e
-         ON e.dbid = b.dbid AND e.instance_number = b.instance_number AND e.stat_id = b.stat_id AND e.snap_id = :e
-       WHERE b.dbid = :dbid AND b.instance_number = :inst AND b.snap_id = :b
-         AND b.stat_name IN ('DB time', 'DB CPU')`, binds);
-    if (!tm.length) {
-      out.push(`${label}: statistics of this dbid are not visible from the current container — `
-        + "in a PDB enable AWR_PDB_AUTOFLUSH_ENABLED (PDB-level snapshots) or connect to the CDB root.");
-      continue;
-    }
-    const dbTime = Number(tm.find(x => x.STAT_NAME === "DB time")?.SECONDS ?? 0);
-    const dbCpu = Number(tm.find(x => x.STAT_NAME === "DB CPU")?.SECONDS ?? 0);
-    const ev = await rows(conn,
-      `SELECT * FROM (
-         SELECT e.event_name, e.wait_class, e.total_waits - NVL(b.total_waits, 0) AS waits,
-                ROUND((e.time_waited_micro - NVL(b.time_waited_micro, 0)) / 1e6, 1) AS time_s,
-                ROUND((e.time_waited_micro - NVL(b.time_waited_micro, 0))
-                      / NULLIF(e.total_waits - NVL(b.total_waits, 0), 0) / 1e3, 2) AS avg_ms
-         FROM ${p}_system_event e
-         -- LEFT JOIN: events that first occurred after the begin snapshot have no baseline row
-         LEFT JOIN ${p}_system_event b
-           ON b.dbid = e.dbid AND b.instance_number = e.instance_number AND b.event_id = e.event_id AND b.snap_id = :b
-         WHERE e.dbid = :dbid AND e.instance_number = :inst AND e.snap_id = :e
-           AND e.wait_class <> 'Idle'
-           AND e.time_waited_micro > NVL(b.time_waited_micro, 0)
-         ORDER BY time_s DESC)
-       WHERE ROWNUM <= :n`, { ...binds, n });
-    const data: Row[] = [
-      { EVENT_NAME: "DB CPU", WAIT_CLASS: "CPU", WAITS: null, TIME_S: dbCpu, AVG_MS: null },
-      ...ev,
-    ].sort((a, b) => Number(b.TIME_S) - Number(a.TIME_S)).slice(0, n)
-      .map(r => ({ ...r, PCT_DBTIME: dbTime ? Math.round(1000 * Number(r.TIME_S) / dbTime) / 10 : null }));
-    out.push(`${label}\nDB time ${dbTime}s, DB CPU ${dbCpu}s\n\n` + table(data, [
-      ["TIME_S", "TIME_S"], ["PCT_DBTIME", "%DBTIME"], ["WAITS", "WAITS"], ["AVG_MS", "AVG_MS"],
-      ["WAIT_CLASS", "WAIT_CLASS"], ["EVENT_NAME", "EVENT"],
-    ]));
+  const scope = source.label || (Number(s.OWN) === 1 ? "" : " – CDB root AWR data");
+  const label = `Instance ${s.INSTANCE_NUMBER} (dbid ${s.DBID}), snapshots ${s.B}–${s.E} (${s.T_BEGIN} – ${s.T_END})${scope}`;
+  if (s.B === s.E) return `${label}: only one snapshot in the window.`;
+  if (Number(s.STARTUPS) > 1) return `${label}: instance restarted within the window — use a shorter window.`;
+  const binds = { dbid: s.DBID as number, inst: s.INSTANCE_NUMBER as number, b: s.B as number, e: s.E as number };
+  const tm = await rows(conn,
+    `SELECT e.stat_name, ROUND((e.value - b.value) / 1e6, 1) AS seconds
+     FROM ${p}_sys_time_model b
+     JOIN ${p}_sys_time_model e
+       ON e.dbid = b.dbid AND e.instance_number = b.instance_number AND e.stat_id = b.stat_id AND e.snap_id = :e
+     WHERE b.dbid = :dbid AND b.instance_number = :inst AND b.snap_id = :b
+       AND b.stat_name IN ('DB time', 'DB CPU')`, binds);
+  if (!tm.length) {
+    return `${label}: statistics of this dbid are not visible from the current container — `
+      + "in a PDB enable AWR_PDB_AUTOFLUSH_ENABLED (PDB-level snapshots) or connect to the CDB root.";
   }
-  return out.join("\n\n");
+  const dbTime = Number(tm.find(x => x.STAT_NAME === "DB time")?.SECONDS ?? 0);
+  const dbCpu = Number(tm.find(x => x.STAT_NAME === "DB CPU")?.SECONDS ?? 0);
+  const ev = await rows(conn,
+    `SELECT * FROM (
+       SELECT e.event_name, e.wait_class, e.total_waits - NVL(b.total_waits, 0) AS waits,
+              ROUND((e.time_waited_micro - NVL(b.time_waited_micro, 0)) / 1e6, 1) AS time_s,
+              ROUND((e.time_waited_micro - NVL(b.time_waited_micro, 0))
+                    / NULLIF(e.total_waits - NVL(b.total_waits, 0), 0) / 1e3, 2) AS avg_ms
+       FROM ${p}_system_event e
+       -- LEFT JOIN: events that first occurred after the begin snapshot have no baseline row
+       LEFT JOIN ${p}_system_event b
+         ON b.dbid = e.dbid AND b.instance_number = e.instance_number AND b.event_id = e.event_id AND b.snap_id = :b
+       WHERE e.dbid = :dbid AND e.instance_number = :inst AND e.snap_id = :e
+         AND e.wait_class <> 'Idle'
+         AND e.time_waited_micro > NVL(b.time_waited_micro, 0)
+       ORDER BY time_s DESC)
+     WHERE ROWNUM <= :n`, { ...binds, n });
+  const data: Row[] = [
+    { EVENT_NAME: "DB CPU", WAIT_CLASS: "CPU", WAITS: null, TIME_S: dbCpu, AVG_MS: null },
+    ...ev,
+  ].sort((a, b) => Number(b.TIME_S) - Number(a.TIME_S)).slice(0, n)
+    .map(r => ({ ...r, PCT_DBTIME: dbTime ? Math.round(1000 * Number(r.TIME_S) / dbTime) / 10 : null }));
+  return `${label}\nDB time ${dbTime}s, DB CPU ${dbCpu}s\n\n` + table(data, [
+    ["TIME_S", "TIME_S"], ["PCT_DBTIME", "%DBTIME"], ["WAITS", "WAITS"], ["AVG_MS", "AVG_MS"],
+    ["WAIT_CLASS", "WAIT_CLASS"], ["EVENT_NAME", "EVENT"],
+  ]);
 }
 
 async function sqlMonitor(conn: oracledb.Connection, args: Args): Promise<string> {

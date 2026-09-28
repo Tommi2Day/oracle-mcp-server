@@ -123,44 +123,9 @@ export function getDriverMode(env: NodeJS.ProcessEnv = process.env): DriverMode 
  * and the same strings without the jdbc: prefix (Easy Connect, descriptors, aliases).
  */
 export function parseConnectString(raw: string): ParsedConnectString {
-  let s = raw.trim();
   const result: ParsedConnectString = { connectString: "", ignoredParams: [] };
-
-  const jdbc = s.match(/^jdbc:oracle:(?:thin|oci8?|kprb):/i);
-  if (jdbc) {
-    s = s.slice(jdbc[0].length);
-    const at = s.indexOf("@");
-    if (at >= 0) {
-      const creds = s.slice(0, at);
-      s = s.slice(at + 1);
-      if (creds) {
-        const slash = creds.indexOf("/");
-        const user = slash >= 0 ? creds.slice(0, slash) : creds;
-        const password = slash >= 0 ? creds.slice(slash + 1) : undefined;
-        if (user) result.user = unquote(user);
-        if (password) result.password = unquote(password);
-      }
-    }
-  } else if (s.startsWith("@")) {
-    s = s.slice(1);
-  }
-
-  // URL parameters: after the last ')' for descriptors, anywhere for Easy Connect / aliases
-  const paramStart = s.indexOf("?", s.startsWith("(") ? s.lastIndexOf(")") : 0);
-  if (paramStart >= 0) {
-    const kept: string[] = [];
-    for (const pair of s.slice(paramStart + 1).split("&")) {
-      if (!pair) continue;
-      const eq = pair.indexOf("=");
-      const key = eq >= 0 ? pair.slice(0, eq) : pair;
-      const value = eq >= 0 ? decodeURIComponent(pair.slice(eq + 1)) : "";
-      if (key.toUpperCase() === "TNS_ADMIN") result.configDir = value;
-      else if (key.includes(".")) result.ignoredParams.push(key);
-      else kept.push(pair);
-    }
-    s = s.slice(0, paramStart) + (kept.length ? "?" + kept.join("&") : "");
-  }
-
+  let s = stripConnectPrefix(raw.trim(), result);
+  s = extractUrlParams(s, result);
   if (s.startsWith("//")) s = s.slice(2);
 
   const sid = s.match(HOST_PORT_SID);
@@ -170,6 +135,47 @@ export function parseConnectString(raw: string): ParsedConnectString {
 
   result.connectString = s;
   return result;
+}
+
+/** Removes a jdbc:oracle:…: prefix (moving user/password to result) or a leading "@". */
+function stripConnectPrefix(s: string, result: ParsedConnectString): string {
+  const jdbc = s.match(/^jdbc:oracle:(?:thin|oci8?|kprb):/i);
+  if (!jdbc) return s.startsWith("@") ? s.slice(1) : s;
+  s = s.slice(jdbc[0].length);
+  const at = s.indexOf("@");
+  if (at < 0) return s;
+  parseUrlCredentials(s.slice(0, at), result);
+  return s.slice(at + 1);
+}
+
+/** user[/password] before the "@" of a JDBC URL. */
+function parseUrlCredentials(creds: string, result: ParsedConnectString): void {
+  if (!creds) return;
+  const slash = creds.indexOf("/");
+  const user = slash >= 0 ? creds.slice(0, slash) : creds;
+  const password = slash >= 0 ? creds.slice(slash + 1) : undefined;
+  if (user) result.user = unquote(user);
+  if (password) result.password = unquote(password);
+}
+
+/**
+ * URL parameters: after the last ')' for descriptors, anywhere for Easy Connect / aliases.
+ * TNS_ADMIN becomes configDir, JDBC driver properties (containing a dot) are dropped and reported.
+ */
+function extractUrlParams(s: string, result: ParsedConnectString): string {
+  const paramStart = s.indexOf("?", s.startsWith("(") ? s.lastIndexOf(")") : 0);
+  if (paramStart < 0) return s;
+  const kept: string[] = [];
+  for (const pair of s.slice(paramStart + 1).split("&")) {
+    if (!pair) continue;
+    const eq = pair.indexOf("=");
+    const key = eq >= 0 ? pair.slice(0, eq) : pair;
+    const value = eq >= 0 ? decodeURIComponent(pair.slice(eq + 1)) : "";
+    if (key.toUpperCase() === "TNS_ADMIN") result.configDir = value;
+    else if (key.includes(".")) result.ignoredParams.push(key);
+    else kept.push(pair);
+  }
+  return s.slice(0, paramStart) + (kept.length ? "?" + kept.join("&") : "");
 }
 
 /**
@@ -255,26 +261,38 @@ export function mergeConnection(token: OraConnection | null | undefined, base: O
   if (!token) return { ...base };
   const tokenHasTarget = TARGET_KEYS.some(k => nonEmpty(token[k]));
   const merged: OraConnection = {};
-
-  const targetSrc = tokenHasTarget ? token : base;
-  for (const k of ["connect_string", "tns_alias", "host", "port", "service_name", "sid", "protocol"] as const) {
-    if (targetSrc[k] !== undefined && targetSrc[k] !== "") merged[k] = targetSrc[k] as never;
+  copySet(merged, tokenHasTarget ? token : base, MERGE_TARGET_KEYS);
+  mergeCredentials(merged, token, base);
+  for (const k of MERGE_INDIVIDUAL_KEYS) {
+    const v = isSet(token[k]) ? token[k] : base[k];
+    if (isSet(v)) merged[k] = v as never;
   }
+  return merged;
+}
 
+const MERGE_TARGET_KEYS = ["connect_string", "tns_alias", "host", "port", "service_name", "sid", "protocol"] as const;
+const MERGE_INDIVIDUAL_KEYS = ["tns_admin", "wallet_location", "wallet_password", "ssl_server_dn_match",
+  "ssl_server_cert_dn", "diagnostics_pack", "tuning_pack"] as const;
+
+function isSet(v: unknown): boolean {
+  return v !== undefined && v !== "";
+}
+
+function copySet(to: OraConnection, from: OraConnection, keys: readonly (keyof OraConnection)[]): void {
+  for (const k of keys) {
+    if (isSet(from[k])) to[k] = from[k] as never;
+  }
+}
+
+/** user/password come together from the token when it sets a user, otherwise from the default. */
+function mergeCredentials(merged: OraConnection, token: OraConnection, base: OraConnection): void {
   if (nonEmpty(token.user)) {
     merged.user = token.user;
     if (token.password) merged.password = token.password;
-  } else {
-    if (base.user) merged.user = base.user;
-    if (token.password || base.password) merged.password = token.password || base.password;
+    return;
   }
-
-  for (const k of ["tns_admin", "wallet_location", "wallet_password", "ssl_server_dn_match", "ssl_server_cert_dn",
-    "diagnostics_pack", "tuning_pack"] as const) {
-    const v = token[k] !== undefined && token[k] !== "" ? token[k] : base[k];
-    if (v !== undefined && v !== "") merged[k] = v as never;
-  }
-  return merged;
+  if (base.user) merged.user = base.user;
+  if (token.password || base.password) merged.password = token.password || base.password;
 }
 
 // ── Client-supplied connections ─────────────────────────────────────────────
@@ -317,6 +335,20 @@ export function applyClientConnection(token: OraConnection | null, client: OraCo
   const c = extractJdbcCredentials(client);
   const keys = Object.keys(c).filter(k => nonEmpty((c as Record<string, unknown>)[k]) !== undefined);
   if (!keys.length) return token;
+  const { hasUser, hasTarget } = validateClientConnection(c, keys, mode);
+
+  const out: OraConnection = { ...(token ?? {}) };
+  if (hasUser) { delete out.user; delete out.password; }
+  if (hasTarget) {
+    for (const k of CLIENT_TARGET_FIELDS) delete out[k];
+  }
+  for (const k of keys) (out as Record<string, unknown>)[k] = (c as Record<string, unknown>)[k];
+  return out;
+}
+
+/** Checks the client fields against the token's mode; throws ClientConnectionError (403/400). */
+function validateClientConnection(c: OraConnection, keys: string[],
+  mode: ClientConnectionMode): { hasUser: boolean; hasTarget: boolean } {
   if (mode === "none") {
     throw new ClientConnectionError("This token does not allow client-supplied connection parameters", 403);
   }
@@ -338,14 +370,7 @@ export function applyClientConnection(token: OraConnection | null, client: OraCo
   if (hasTarget && !hasUser) {
     throw new ClientConnectionError("A client-supplied target requires user and password", 400);
   }
-
-  const out: OraConnection = { ...(token ?? {}) };
-  if (hasUser) { delete out.user; delete out.password; }
-  if (hasTarget) {
-    for (const k of CLIENT_TARGET_FIELDS) delete out[k];
-  }
-  for (const k of keys) (out as Record<string, unknown>)[k] = (c as Record<string, unknown>)[k];
-  return out;
+  return { hasUser, hasTarget };
 }
 
 /** Final connect string for a (merged) connection, plus credentials/configDir found in a JDBC URL. */

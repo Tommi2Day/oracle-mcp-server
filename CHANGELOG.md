@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Internal refactoring to keep the cognitive complexity of every function below 15 (Sonar rule S3776): the HTTP
+  router, MCP session start/resume, the admin token API, connect string parsing/merging, `awr_top_events`, startup
+  and the admin UI form builder are split into small functions. No change in behavior, API or log output
 - `npm run ci:test` also writes `coverage/lcov.info` (coverage of `src/`), so SonarQube picks up the test coverage
   instead of reporting 0%
 

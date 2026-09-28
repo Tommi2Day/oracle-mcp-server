@@ -1056,13 +1056,44 @@ async function submitDelete(id) {
 }
 
 // ── Token form builder ────────────────────────────────────────────────────────
+/** Server default connection shown next to "Use default connection". */
+function defaultConnInfo() {
+  const db = state.serverInfo && state.serverInfo.db;
+  if (!db) return '';
+  const target = db.tns_alias ? 'TNS alias ' + db.tns_alias : (db.connect_string || '?');
+  return `${target}  ·  user: ${db.user || '?'}`;
+}
+
+function connType(c) {
+  if (c.connect_string) return 'connect_string';
+  return c.tns_alias ? 'tns_alias' : 'host';
+}
+
+/** "selected" attribute of an <option>. */
+function sel(value, current) {
+  return value === current ? 'selected' : '';
+}
+
+/** "Active" switch, only in the edit form. */
+function activeField(t) {
+  if (!t) return '';
+  return `
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+        <label class="toggle" style="margin:0">
+          <input type="checkbox" id="f-active" ${t.active ? 'checked' : ''}>
+          <span class="toggle-track"></span><span class="toggle-thumb"></span>
+        </label>
+        Active
+      </label>
+    </div>`;
+}
+
 function buildForm(t) {
   const c        = (t && t.connection) || {};
   const hasConn  = !!(t && t.connection);
-  const isEdit   = !!t;
-  const db       = state.serverInfo && state.serverInfo.db;
-  const defInfo  = db ? `${db.tns_alias ? 'TNS alias ' + db.tns_alias : (db.connect_string || '?')}  ·  user: ${db.user || '?'}` : '';
-  const ctype    = c.connect_string ? 'connect_string' : c.tns_alias ? 'tns_alias' : 'host';
+  const defInfo  = defaultConnInfo();
+  const ctype    = connType(c);
   const pwHint   = c.password_set ? 'unchanged' : '••••••••';
   const wpwHint  = c.wallet_password_set ? 'unchanged' : 'only for encrypted ewallet.pem';
   const dnMatch  = c.ssl_server_dn_match === undefined ? '' : String(c.ssl_server_dn_match);
@@ -1074,16 +1105,7 @@ function buildForm(t) {
       <input id="f-name" type="text" value="${x(t ? t.name : '')}" placeholder="e.g. claude-desktop" autocomplete="off">
     </div>
 
-    ${isEdit ? `
-    <div class="field">
-      <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
-        <label class="toggle" style="margin:0">
-          <input type="checkbox" id="f-active" ${t.active ? 'checked' : ''}>
-          <span class="toggle-track"></span><span class="toggle-thumb"></span>
-        </label>
-        Active
-      </label>
-    </div>` : ''}
+    ${activeField(t)}
 
     <div class="field">
       <label for="f-clientconn">Client-supplied connection
@@ -1115,9 +1137,9 @@ function buildForm(t) {
         <div class="field full">
           <label for="f-ctype">Connection type</label>
           <select id="f-ctype" onchange="switchConnType()">
-            <option value="host" ${ctype === 'host' ? 'selected' : ''}>Host / port / service</option>
-            <option value="tns_alias" ${ctype === 'tns_alias' ? 'selected' : ''}>TNS alias (tnsnames.ora)</option>
-            <option value="connect_string" ${ctype === 'connect_string' ? 'selected' : ''}>Connect string / JDBC URL</option>
+            <option value="host" ${sel('host', ctype)}>Host / port / service</option>
+            <option value="tns_alias" ${sel('tns_alias', ctype)}>TNS alias (tnsnames.ora)</option>
+            <option value="connect_string" ${sel('connect_string', ctype)}>Connect string / JDBC URL</option>
           </select>
         </div>
         <div class="field ct ct-host">
@@ -1139,8 +1161,8 @@ function buildForm(t) {
         <div class="field full ct ct-host">
           <label for="f-protocol">Protocol</label>
           <select id="f-protocol">
-            <option value="tcp" ${(c.protocol || 'tcp') === 'tcp' ? 'selected' : ''}>TCP (SQL*Net)</option>
-            <option value="tcps" ${c.protocol === 'tcps' ? 'selected' : ''}>TCPS (TLS)</option>
+            <option value="tcp" ${sel('tcp', c.protocol || 'tcp')}>TCP (SQL*Net)</option>
+            <option value="tcps" ${sel('tcps', c.protocol)}>TCPS (TLS)</option>
           </select>
         </div>
         <div class="field full ct ct-tns_alias">
@@ -1175,9 +1197,9 @@ function buildForm(t) {
         <div class="field">
           <label for="f-dnmatch">Server DN match</label>
           <select id="f-dnmatch">
-            <option value="" ${dnMatch === '' ? 'selected' : ''}>Default</option>
-            <option value="true" ${dnMatch === 'true' ? 'selected' : ''}>Enabled</option>
-            <option value="false" ${dnMatch === 'false' ? 'selected' : ''}>Disabled</option>
+            <option value="" ${sel('', dnMatch)}>Default</option>
+            <option value="true" ${sel('true', dnMatch)}>Enabled</option>
+            <option value="false" ${sel('false', dnMatch)}>Disabled</option>
           </select>
         </div>
         <div class="field">

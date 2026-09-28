@@ -508,17 +508,23 @@ export function createMcpServer(getDbPool: PoolProvider = () => getPool(null), t
 /** Oracle column type as shown in SQL*Plus DESCRIBE. */
 export function formatOracleType(r: Record<string, unknown>): string {
   const t = String(r.DATA_TYPE ?? "");
-  if (/^(N?VARCHAR2|N?CHAR)$/.test(t)) {
-    const unit = t.startsWith("N") ? "" : r.CHAR_USED === "C" ? " CHAR" : " BYTE";
-    return `${t}(${r.CHAR_LENGTH ?? r.DATA_LENGTH}${unit})`;
-  }
+  if (/^(N?VARCHAR2|N?CHAR)$/.test(t)) return formatCharType(t, r);
   if (t === "RAW") return `RAW(${r.DATA_LENGTH})`;
-  if (t === "NUMBER") {
-    if (r.DATA_PRECISION === null || r.DATA_PRECISION === undefined) return r.DATA_SCALE === 0 ? "INTEGER" : "NUMBER";
-    return r.DATA_SCALE ? `NUMBER(${r.DATA_PRECISION},${r.DATA_SCALE})` : `NUMBER(${r.DATA_PRECISION})`;
-  }
+  if (t === "NUMBER") return formatNumberType(r);
   if (t === "FLOAT" && r.DATA_PRECISION) return `FLOAT(${r.DATA_PRECISION})`;
   return t;
+}
+
+/** VARCHAR2(20 CHAR), CHAR(1 BYTE); national types have no length semantics. */
+function formatCharType(t: string, r: Record<string, unknown>): string {
+  let unit = "";
+  if (!t.startsWith("N")) unit = r.CHAR_USED === "C" ? " CHAR" : " BYTE";
+  return `${t}(${r.CHAR_LENGTH ?? r.DATA_LENGTH}${unit})`;
+}
+
+function formatNumberType(r: Record<string, unknown>): string {
+  if (r.DATA_PRECISION === null || r.DATA_PRECISION === undefined) return r.DATA_SCALE === 0 ? "INTEGER" : "NUMBER";
+  return r.DATA_SCALE ? `NUMBER(${r.DATA_PRECISION},${r.DATA_SCALE})` : `NUMBER(${r.DATA_PRECISION})`;
 }
 
 /** Tool params for the log line. SQL text is only included at debug level;
@@ -560,118 +566,177 @@ export async function handleRequest(req: http.IncomingMessage, res: http.ServerR
 }
 
 async function _handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  if ((req.url === "/admin" || req.url === "/admin/") && req.method === "GET") {
-    if (cachedAdminHtml) {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(cachedAdminHtml);
-    } else {
-      res.writeHead(404);
-      res.end("Admin UI not found");
-    }
-    return;
-  }
-  if (req.url === "/health" && req.method === "GET") {
-    const tlsEnabled = (process.env.TLS_ENABLED || "false").toLowerCase() !== "false";
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", tls: tlsEnabled }));
-    return;
-  }
-  if (req.url === "/info" && req.method === "GET") {
-    if (!checkAdminAuth(req, res)) return;
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      name: mcpServerName,
-      version,
-      db: describeConnection(getDefaultConnection(), getDriverMode()),
-      features: featuresFor(null),
-    }));
-    return;
+  if (req.method === "GET") {
+    const serve = GET_ROUTES.get(req.url ?? "");
+    if (serve) { serve(req, res); return; }
   }
   if (req.url?.startsWith("/admin/tokens")) {
-    await handleAdminRequest(req, res, {
-      onDelete: (token) => releasePool(token.connection),
-      onUpdate: (before, after) => {
-        if (JSON.stringify(before.connection) !== JSON.stringify(after.connection) || !after.active) {
-          releasePool(before.connection);
-        }
-      },
-    });
+    await handleAdminRequest(req, res, ADMIN_HOOKS);
     return;
   }
   if (req.url === "/mcp") {
-    const auth = await checkAuth(req, res);
-    if (!auth.ok) return;
-
-    const clientIp = getClientIp(req);
-    const sessionId = req.headers["mcp-session-id"];
-    if (typeof sessionId === "string" && sessions.has(sessionId)) {
-      // The admin may have revoked the token's client_connection permission meanwhile
-      const client = sessionClientConnections.get(sessionId);
-      if (client) {
-        try {
-          applyClientConnection(auth.connection, client, auth.clientConnection);
-        } catch (err) {
-          rejectClientConnection(req, res, auth.name, clientIp, err, 403);
-          return;
-        }
-      }
-      await sessions.get(sessionId)!.handleRequest(req, res);
-    } else {
-      // New session — pool for this token is resolved lazily on the first tool call.
-      // X-Oracle-* headers of the initialize request override the token's connection if permitted.
-      let connection = auth.connection;
-      let client: OraConnection | null = null;
-      let clientPoolKey: string | undefined;
-      try {
-        client = clientConnectionFromHeaders(req.headers);
-        if (client) {
-          connection = applyClientConnection(auth.connection, client, auth.clientConnection);
-          clientPoolKey = poolKey(connection);
-        }
-      } catch (err) {
-        rejectClientConnection(req, res, auth.name, clientIp, err, err instanceof ClientConnectionError ? err.status : 400);
-        return;
-      }
-      let connInfo = "";
-      if (client) {
-        const d = describeConnection(mergeConnection(connection, getDefaultConnection()), getDriverMode());
-        connInfo = ` connection="client" target="${d.connect_string}" user="${d.user ?? ""}"`;
-      }
-      const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (id) => {
-          sessions.set(id, transport);
-          if (client && clientPoolKey) {
-            sessionClientConnections.set(id, client);
-            retainClientPool(clientPoolKey);
-          }
-          const startedAt = Date.now();
-          log("info", "SESSION", `token="${auth.name}" action="start" session="${id}" ip="${clientIp}"${connInfo}`);
-          // Chain instead of overwrite: server.connect() already installed its own onclose
-          const prevOnClose = transport.onclose;
-          transport.onclose = () => {
-            sessions.delete(id);
-            if (sessionClientConnections.delete(id) && clientPoolKey && connection) {
-              releaseClientPool(clientPoolKey, connection);
-            }
-            const duration = Math.round((Date.now() - startedAt) / 1000);
-            log("info", "SESSION", `token="${auth.name}" action="stop" session="${id}" ip="${clientIp}" duration=${duration}s`);
-            prevOnClose?.();
-          };
-        },
-      });
-      const server = createMcpServer(() => getPool(connection), auth.name, clientIp, featuresFor(connection));
-      await server.connect(transport);
-      await transport.handleRequest(req, res);
-    }
+    await handleMcp(req, res);
     return;
   }
   res.writeHead(404);
   res.end("Not found");
 }
 
+function serveAdminHtml(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  if (cachedAdminHtml) {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(cachedAdminHtml);
+  } else {
+    res.writeHead(404);
+    res.end("Admin UI not found");
+  }
+}
+
+function serveHealth(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  const tlsEnabled = (process.env.TLS_ENABLED || "false").toLowerCase() !== "false";
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ status: "ok", tls: tlsEnabled }));
+}
+
+function serveInfo(req: http.IncomingMessage, res: http.ServerResponse): void {
+  if (!checkAdminAuth(req, res)) return;
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({
+    name: mcpServerName,
+    version,
+    db: describeConnection(getDefaultConnection(), getDriverMode()),
+    features: featuresFor(null),
+  }));
+}
+
+const GET_ROUTES = new Map<string, (req: http.IncomingMessage, res: http.ServerResponse) => void>([
+  ["/admin", serveAdminHtml],
+  ["/admin/", serveAdminHtml],
+  ["/health", serveHealth],
+  ["/info", serveInfo],
+]);
+
+/** Pools of deleted/changed/deactivated tokens are closed (if no other token uses them). */
+const ADMIN_HOOKS = {
+  onDelete: (token: { connection: OraConnection | null }) => releasePool(token.connection),
+  onUpdate: (before: { connection: OraConnection | null }, after: { connection: OraConnection | null; active: boolean }) => {
+    if (JSON.stringify(before.connection) !== JSON.stringify(after.connection) || !after.active) {
+      releasePool(before.connection);
+    }
+  },
+};
+
+type AuthOk = Extract<Awaited<ReturnType<typeof checkAuth>>, { ok: true }>;
+
+async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const auth = await checkAuth(req, res);
+  if (!auth.ok) return;
+  const clientIp = getClientIp(req);
+  const sessionId = req.headers["mcp-session-id"];
+  if (typeof sessionId === "string" && sessions.has(sessionId)) {
+    await resumeSession(req, res, auth, clientIp, sessionId);
+  } else {
+    await startSession(req, res, auth, clientIp);
+  }
+}
+
+async function resumeSession(req: http.IncomingMessage, res: http.ServerResponse, auth: AuthOk,
+  clientIp: string, sessionId: string): Promise<void> {
+  // The admin may have revoked the token's client_connection permission meanwhile
+  const client = sessionClientConnections.get(sessionId);
+  if (client) {
+    try {
+      applyClientConnection(auth.connection, client, auth.clientConnection);
+    } catch (err) {
+      rejectClientConnection(req, res, auth.name, clientIp, err, 403);
+      return;
+    }
+  }
+  await sessions.get(sessionId)!.handleRequest(req, res);
+}
+
+interface SessionConnection {
+  connection: OraConnection | null;
+  client: OraConnection | null;
+  clientPoolKey?: string;
+}
+
+/** X-Oracle-* headers of the initialize request override the token's connection if permitted.
+ *  Returns null after answering the request when they are rejected. */
+function resolveSessionConnection(req: http.IncomingMessage, res: http.ServerResponse, auth: AuthOk,
+  clientIp: string): SessionConnection | null {
+  try {
+    const client = clientConnectionFromHeaders(req.headers);
+    if (!client) return { connection: auth.connection, client: null };
+    const connection = applyClientConnection(auth.connection, client, auth.clientConnection);
+    return { connection, client, clientPoolKey: poolKey(connection) };
+  } catch (err) {
+    rejectClientConnection(req, res, auth.name, clientIp, err, err instanceof ClientConnectionError ? err.status : 400);
+    return null;
+  }
+}
+
+async function startSession(req: http.IncomingMessage, res: http.ServerResponse, auth: AuthOk,
+  clientIp: string): Promise<void> {
+  // New session — pool for this token is resolved lazily on the first tool call.
+  const sc = resolveSessionConnection(req, res, auth, clientIp);
+  if (!sc) return;
+  const { connection } = sc;
+  const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    onsessioninitialized: (id) => trackSession(transport, id, auth.name, clientIp, sc),
+  });
+  const server = createMcpServer(() => getPool(connection), auth.name, clientIp, featuresFor(connection));
+  await server.connect(transport);
+  await transport.handleRequest(req, res);
+}
+
+/** Registers the session, logs start/stop and releases a client pool with the last session. */
+function trackSession(transport: StreamableHTTPServerTransport, id: string, tokenName: string, clientIp: string,
+  { connection, client, clientPoolKey }: SessionConnection): void {
+  sessions.set(id, transport);
+  if (client && clientPoolKey) {
+    sessionClientConnections.set(id, client);
+    retainClientPool(clientPoolKey);
+  }
+  let connInfo = "";
+  if (client) {
+    const d = describeConnection(mergeConnection(connection, getDefaultConnection()), getDriverMode());
+    connInfo = ` connection="client" target="${d.connect_string}" user="${d.user ?? ""}"`;
+  }
+  const startedAt = Date.now();
+  log("info", "SESSION", `token="${tokenName}" action="start" session="${id}" ip="${clientIp}"${connInfo}`);
+  // Chain instead of overwrite: server.connect() already installed its own onclose
+  const prevOnClose = transport.onclose;
+  transport.onclose = () => {
+    sessions.delete(id);
+    if (sessionClientConnections.delete(id) && clientPoolKey && connection) {
+      releaseClientPool(clientPoolKey, connection);
+    }
+    const duration = Math.round((Date.now() - startedAt) / 1000);
+    log("info", "SESSION", `token="${tokenName}" action="stop" session="${id}" ip="${clientIp}" duration=${duration}s`);
+    prevOnClose?.();
+  };
+}
+
 // ── Startup (only when run directly) ─────────────────────────────────────────
 async function main(): Promise<void> {
+  installProcessHandlers();
+  initRuntime();
+  const { dbLine, perfLine } = startupSummary();
+
+  const TRANSPORT = (process.env.TRANSPORT || "stdio").toLowerCase();
+  if (TRANSPORT === "http") {
+    startHttpServer(dbLine, perfLine);
+  } else {
+    const server    = createMcpServer(() => getPool(null), "stdio", "local");
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error(`Oracle MCP Server running on stdio – ${dbLine} – ${perfLine}`);
+  }
+}
+
+function installProcessHandlers(): void {
   process.on("unhandledRejection", (reason) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
     log("error", "FATAL", `Unhandled rejection: ${msg}`);
@@ -687,7 +752,10 @@ async function main(): Promise<void> {
       closeAllPools().finally(() => process.exit(0));
     });
   }
+}
 
+/** Driver, token store migration and trusted CAs; exits on configuration errors. */
+function initRuntime(): void {
   try {
     initDriver();
   } catch (err) {
@@ -704,7 +772,10 @@ async function main(): Promise<void> {
       process.exit(1);
     }
   }
+}
 
+/** Database and feature lines for the startup banner; exits if the default connection is invalid. */
+function startupSummary(): { dbLine: string; perfLine: string } {
   const dbInfo = describeConnection(getDefaultConnection(), getDriverMode());
   if (dbInfo.error) {
     console.error(`❌ Invalid default Oracle connection: ${dbInfo.error}`);
@@ -717,52 +788,51 @@ async function main(): Promise<void> {
   if (f.tuning && !f.diagnostics) {
     log("warn", "CONFIG", "ORA_TUNING_PACK is enabled without ORA_DIAGNOSTICS_PACK — the Tuning Pack requires a Diagnostics Pack licence.");
   }
+  return { dbLine, perfLine };
+}
 
-  const TRANSPORT   = (process.env.TRANSPORT   || "stdio").toLowerCase();
+function startHttpServer(dbLine: string, perfLine: string): void {
   const TLS_ENABLED = (process.env.TLS_ENABLED || "false").toLowerCase() !== "false";
   const PORT        = parseInt(process.env.PORT || "3000", 10);
+  const authInfo = getAuthToken()
+    ? "🔑 Bearer token required (env + file tokens)"
+    : "⚠️  disabled (AUTH_TOKEN not set)";
+  const banner = (scheme: string) => {
+    console.error(`Oracle MCP Server (${scheme.toUpperCase()}) listening on port ${PORT}`);
+    console.error(`  MCP endpoint : ${scheme}://localhost:${PORT}/mcp`);
+    console.error(`  Admin UI     : ${scheme}://localhost:${PORT}/admin`);
+    console.error(`  Admin API    : ${scheme}://localhost:${PORT}/admin/tokens`);
+    console.error(`  Health check : ${scheme}://localhost:${PORT}/health`);
+    console.error(`  Database     : ${dbLine}`);
+    console.error(`  Features     : ${perfLine}`);
+    console.error(`  Auth         : ${authInfo}`);
+    console.error(`  Log level    : ${getLogLevel()}`);
+  };
 
-  if (TRANSPORT === "http") {
-    const authInfo = getAuthToken()
-      ? "🔑 Bearer token required (env + file tokens)"
-      : "⚠️  disabled (AUTH_TOKEN not set)";
-    const banner = (scheme: string) => {
-      console.error(`Oracle MCP Server (${scheme.toUpperCase()}) listening on port ${PORT}`);
-      console.error(`  MCP endpoint : ${scheme}://localhost:${PORT}/mcp`);
-      console.error(`  Admin UI     : ${scheme}://localhost:${PORT}/admin`);
-      console.error(`  Admin API    : ${scheme}://localhost:${PORT}/admin/tokens`);
-      console.error(`  Health check : ${scheme}://localhost:${PORT}/health`);
-      console.error(`  Database     : ${dbLine}`);
-      console.error(`  Features     : ${perfLine}`);
-      console.error(`  Auth         : ${authInfo}`);
-      console.error(`  Log level    : ${getLogLevel()}`);
-    };
-
-    if (TLS_ENABLED) {
-      const cert = readFileEnv("TLS_CERT_FILE");
-      const key  = readFileEnv("TLS_KEY_FILE");
-      if (!cert || !key) {
-        console.error("❌ TLS_ENABLED=true requires TLS_CERT_FILE and TLS_KEY_FILE.");
-        process.exit(1);
-      }
-      const tlsOptions: https.ServerOptions = { cert, key };
-      const ca = readFileEnv("TLS_CA_FILE");
-      if (ca) {
-        tlsOptions.ca = ca;
-        tlsOptions.requestCert = true;
-        tlsOptions.rejectUnauthorized = true;
-        console.error("🔐 mTLS enabled – client certificates required.");
-      }
-      https.createServer(tlsOptions, handleRequest).listen(PORT, () => banner("https"));
-    } else {
-      http.createServer(handleRequest).listen(PORT, () => banner("http"));
-    }
-  } else {
-    const server    = createMcpServer(() => getPool(null), "stdio", "local");
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-    console.error(`Oracle MCP Server running on stdio – ${dbLine} – ${perfLine}`);
+  if (!TLS_ENABLED) {
+    http.createServer(handleRequest).listen(PORT, () => banner("http"));
+    return;
   }
+  https.createServer(tlsServerOptions(), handleRequest).listen(PORT, () => banner("https"));
+}
+
+/** Server certificate from TLS_CERT_FILE/TLS_KEY_FILE; TLS_CA_FILE enables mTLS. Exits if cert/key are missing. */
+function tlsServerOptions(): https.ServerOptions {
+  const cert = readFileEnv("TLS_CERT_FILE");
+  const key  = readFileEnv("TLS_KEY_FILE");
+  if (!cert || !key) {
+    console.error("❌ TLS_ENABLED=true requires TLS_CERT_FILE and TLS_KEY_FILE.");
+    process.exit(1);
+  }
+  const tlsOptions: https.ServerOptions = { cert, key };
+  const ca = readFileEnv("TLS_CA_FILE");
+  if (ca) {
+    tlsOptions.ca = ca;
+    tlsOptions.requestCert = true;
+    tlsOptions.rejectUnauthorized = true;
+    console.error("🔐 mTLS enabled – client certificates required.");
+  }
+  return tlsOptions;
 }
 
 if (isMain) await main();

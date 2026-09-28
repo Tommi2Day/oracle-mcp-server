@@ -318,25 +318,37 @@ export function validateConnection(c: unknown): string | null {
   if (c === null || c === undefined) return null;
   if (typeof c !== "object" || Array.isArray(c)) return '"connection" must be an object or null';
   const conn = c as Record<string, unknown>;
-  for (const k of Object.keys(conn)) {
-    if (![...STRING_FIELDS, ...BOOLEAN_FIELDS, "port"].includes(k)) return `Unknown connection field "${k}"`;
-  }
-  for (const k of STRING_FIELDS) {
-    if (conn[k] !== undefined && conn[k] !== null && typeof conn[k] !== "string") return `"${k}" must be a string`;
-  }
-  for (const k of BOOLEAN_FIELDS) {
-    const v = conn[k];
-    if (v !== undefined && v !== null && v !== "" && typeof v !== "boolean" && !["true", "false"].includes(String(v).toLowerCase())) {
-      return `"${k}" must be a boolean`;
-    }
-  }
+  return unknownFieldError(conn) ?? fieldTypeError(conn) ?? fieldValueError(conn);
+}
+
+function unknownFieldError(conn: Record<string, unknown>): string | null {
+  const known: readonly string[] = [...STRING_FIELDS, ...BOOLEAN_FIELDS, "port"];
+  const unknown = Object.keys(conn).find(k => !known.includes(k));
+  return unknown === undefined ? null : `Unknown connection field "${unknown}"`;
+}
+
+function isBooleanLike(v: unknown): boolean {
+  return v === undefined || v === null || v === "" || typeof v === "boolean"
+    || ["true", "false"].includes(String(v).toLowerCase());
+}
+
+function fieldTypeError(conn: Record<string, unknown>): string | null {
+  const str = STRING_FIELDS.find(k => conn[k] !== undefined && conn[k] !== null && typeof conn[k] !== "string");
+  if (str) return `"${str}" must be a string`;
+  const bool = BOOLEAN_FIELDS.find(k => !isBooleanLike(conn[k]));
+  return bool ? `"${bool}" must be a boolean` : null;
+}
+
+function isAbsolutePath(p: string): boolean {
+  return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p);
+}
+
+function fieldValueError(conn: Record<string, unknown>): string | null {
   if (conn.port !== undefined && conn.port !== null && conn.port !== ""
       && !/^\d+$/.test(String(conn.port))) return '"port" must be a number';
   if (conn.protocol && !["tcp", "tcps"].includes(String(conn.protocol).toLowerCase())) return '"protocol" must be tcp or tcps';
-  for (const k of ["tns_admin", "wallet_location"] as const) {
-    if (conn[k] && !String(conn[k]).startsWith("/") && !/^[A-Za-z]:[\\/]/.test(String(conn[k]))) return `"${k}" must be an absolute path`;
-  }
-  return null;
+  const relative = (["tns_admin", "wallet_location"] as const).find(k => conn[k] && !isAbsolutePath(String(conn[k])));
+  return relative ? `"${relative}" must be an absolute path` : null;
 }
 
 /** Drops empty strings/nulls so stored connections only contain set fields. */
@@ -379,7 +391,7 @@ export interface AdminHooks {
 
 const CLIENT_MODE_ERROR = '"client_connection" must be none, credentials or full';
 
-export async function handleAdminRequest(req: IncomingMessage, res: ServerResponse, { onDelete, onUpdate }: AdminHooks = {}): Promise<void> {
+export async function handleAdminRequest(req: IncomingMessage, res: ServerResponse, hooks: AdminHooks = {}): Promise<void> {
   if (!checkAdminAuth(req, res)) return;
 
   const pathname = new URL(req.url || "/", "http://x").pathname;
@@ -393,94 +405,115 @@ export async function handleAdminRequest(req: IncomingMessage, res: ServerRespon
   log("info", "ADMIN", `token="${tokenName}" action="${req.method} ${pathname}" ip="${ip}"`);
 
   try {
-    // GET /admin/tokens – list all tokens (token_hash and secrets excluded)
-    if (req.method === "GET" && !id) {
-      const { tokens } = loadTokenStore();
-      sendJson(res, 200, { tokens: tokens.map(toSafeToken) });
-      return;
-    }
-
-    // POST /admin/tokens – create new token
-    if (req.method === "POST" && !id) {
-      const { name, connection, client_connection } = JSON.parse((await readBody(req)) || "{}");
-      if (!name || typeof name !== "string" || !name.trim()) {
-        sendJson(res, 400, { error: '"name" is required' });
-        return;
-      }
-      const connErr = validateConnection(connection);
-      if (connErr) { sendJson(res, 400, { error: connErr }); return; }
-      const clientMode = parseClientConnectionMode(client_connection);
-      if (!clientMode) { sendJson(res, 400, { error: CLIENT_MODE_ERROR }); return; }
-      const token = crypto.randomBytes(32).toString("hex");
-      const store = loadTokenStore();
-      const entry: TokenRecord = {
-        id:           store.next_id++,
-        name:         name.trim(),
-        token_hash:   hashToken(token),
-        created_at:   new Date().toISOString(),
-        last_used_at: null,
-        active:       true,
-        connection:   cleanConnection(connection),
-        ...(clientMode !== "none" && { client_connection: clientMode }),
-      };
-      store.tokens.push(entry);
-      saveTokenStore(store);
-      sendJson(res, 201, { ...toSafeToken(entry), token }); // plaintext returned once only
-      return;
-    }
-
-    // PATCH /admin/tokens/:id – update name, active and/or connection
-    if (req.method === "PATCH" && id) {
-      const updates = JSON.parse((await readBody(req)) || "{}");
-      if (updates.name === undefined && updates.active === undefined && updates.connection === undefined
-          && updates.client_connection === undefined) {
-        sendJson(res, 400, { error: "No valid fields (name, active, connection, client_connection)" });
-        return;
-      }
-      if (updates.name !== undefined && (typeof updates.name !== "string" || !updates.name.trim())) {
-        sendJson(res, 400, { error: '"name" must be a non-empty string' });
-        return;
-      }
-      const connErr = validateConnection(updates.connection);
-      if (connErr) { sendJson(res, 400, { error: connErr }); return; }
-      const clientMode = parseClientConnectionMode(updates.client_connection);
-      if (!clientMode) { sendJson(res, 400, { error: CLIENT_MODE_ERROR }); return; }
-      const store = loadTokenStore();
-      const entry = store.tokens.find(t => t.id === id);
-      if (!entry) { sendJson(res, 404, { error: "Not found" }); return; }
-      const before = { ...entry };
-      if (updates.name !== undefined) entry.name = updates.name.trim();
-      if (updates.active !== undefined) entry.active = !!updates.active;
-      if (updates.connection !== undefined) {
-        entry.connection = cleanConnection(mergeSecrets(updates.connection, entry.connection));
-      }
-      if (updates.client_connection !== undefined) {
-        if (clientMode === "none") delete entry.client_connection;
-        else entry.client_connection = clientMode;
-      }
-      saveTokenStore(store);
-      onUpdate?.(before, entry);
-      sendJson(res, 200, toSafeToken(entry));
-      return;
-    }
-
-    // DELETE /admin/tokens/:id – permanently remove token
-    if (req.method === "DELETE" && id) {
-      const store = loadTokenStore();
-      const idx = store.tokens.findIndex(t => t.id === id);
-      if (idx === -1) { sendJson(res, 404, { error: "Not found" }); return; }
-      const [deleted] = store.tokens.splice(idx, 1);
-      saveTokenStore(store);
-      onDelete?.(deleted);
-      sendJson(res, 200, { ok: true, id });
-      return;
-    }
-
-    sendJson(res, 405, { error: "Method Not Allowed" });
+    const handler = adminHandler(req.method, id);
+    if (!handler) { sendJson(res, 405, { error: "Method Not Allowed" }); return; }
+    await handler(req, res, id as number, hooks);
   } catch (err) {
     const msg = (err as Error).message;
     log("error", "ADMIN", `token="${tokenName}" action="${req.method} ${pathname}" ip="${ip}" error=${JSON.stringify(msg)}`);
     if ((err as Error).stack) log("debug", "ADMIN", (err as Error).stack as string);
     sendJson(res, 500, { error: msg });
   }
+}
+
+type AdminHandler = (req: IncomingMessage, res: ServerResponse, id: number, hooks: AdminHooks) => Promise<void> | void;
+
+/** GET/POST on /admin/tokens, PATCH/DELETE on /admin/tokens/:id. */
+function adminHandler(method: string | undefined, id: number | null): AdminHandler | null {
+  if (!id) {
+    if (method === "GET") return listTokens;
+    if (method === "POST") return createToken;
+    return null;
+  }
+  if (method === "PATCH") return updateToken;
+  if (method === "DELETE") return deleteToken;
+  return null;
+}
+
+// GET /admin/tokens – list all tokens (token_hash and secrets excluded)
+function listTokens(_req: IncomingMessage, res: ServerResponse): void {
+  const { tokens } = loadTokenStore();
+  sendJson(res, 200, { tokens: tokens.map(toSafeToken) });
+}
+
+/** Validation of the POST body; returns an error message or null. */
+function createError(body: { name?: unknown; connection?: unknown; client_connection?: unknown }): string | null {
+  if (!body.name || typeof body.name !== "string" || !body.name.trim()) return '"name" is required';
+  return validateConnection(body.connection)
+    ?? (parseClientConnectionMode(body.client_connection) ? null : CLIENT_MODE_ERROR);
+}
+
+// POST /admin/tokens – create new token
+async function createToken(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = JSON.parse((await readBody(req)) || "{}");
+  const err = createError(body);
+  if (err) { sendJson(res, 400, { error: err }); return; }
+  const clientMode = parseClientConnectionMode(body.client_connection) as ClientConnectionMode;
+  const token = crypto.randomBytes(32).toString("hex");
+  const store = loadTokenStore();
+  const entry: TokenRecord = {
+    id:           store.next_id++,
+    name:         body.name.trim(),
+    token_hash:   hashToken(token),
+    created_at:   new Date().toISOString(),
+    last_used_at: null,
+    active:       true,
+    connection:   cleanConnection(body.connection),
+    ...(clientMode !== "none" && { client_connection: clientMode }),
+  };
+  store.tokens.push(entry);
+  saveTokenStore(store);
+  sendJson(res, 201, { ...toSafeToken(entry), token }); // plaintext returned once only
+}
+
+/** Validation of the PATCH body; returns an error message or null. */
+function updateError(updates: Record<string, unknown>): string | null {
+  if (updates.name === undefined && updates.active === undefined && updates.connection === undefined
+      && updates.client_connection === undefined) {
+    return "No valid fields (name, active, connection, client_connection)";
+  }
+  if (updates.name !== undefined && (typeof updates.name !== "string" || !updates.name.trim())) {
+    return '"name" must be a non-empty string';
+  }
+  return validateConnection(updates.connection)
+    ?? (parseClientConnectionMode(updates.client_connection) ? null : CLIENT_MODE_ERROR);
+}
+
+/** Applies validated PATCH fields to a stored token. */
+function applyTokenUpdates(entry: TokenRecord, updates: Record<string, unknown>): void {
+  if (updates.name !== undefined) entry.name = (updates.name as string).trim();
+  if (updates.active !== undefined) entry.active = !!updates.active;
+  if (updates.connection !== undefined) {
+    entry.connection = cleanConnection(mergeSecrets(updates.connection as OraConnection | null, entry.connection));
+  }
+  if (updates.client_connection === undefined) return;
+  const clientMode = parseClientConnectionMode(updates.client_connection);
+  if (clientMode === "none") delete entry.client_connection;
+  else entry.client_connection = clientMode as ClientConnectionMode;
+}
+
+// PATCH /admin/tokens/:id – update name, active and/or connection
+async function updateToken(req: IncomingMessage, res: ServerResponse, id: number, { onUpdate }: AdminHooks): Promise<void> {
+  const updates = JSON.parse((await readBody(req)) || "{}");
+  const err = updateError(updates);
+  if (err) { sendJson(res, 400, { error: err }); return; }
+  const store = loadTokenStore();
+  const entry = store.tokens.find(t => t.id === id);
+  if (!entry) { sendJson(res, 404, { error: "Not found" }); return; }
+  const before = { ...entry };
+  applyTokenUpdates(entry, updates);
+  saveTokenStore(store);
+  onUpdate?.(before, entry);
+  sendJson(res, 200, toSafeToken(entry));
+}
+
+// DELETE /admin/tokens/:id – permanently remove token
+function deleteToken(_req: IncomingMessage, res: ServerResponse, id: number, { onDelete }: AdminHooks): void {
+  const store = loadTokenStore();
+  const idx = store.tokens.findIndex(t => t.id === id);
+  if (idx === -1) { sendJson(res, 404, { error: "Not found" }); return; }
+  const [deleted] = store.tokens.splice(idx, 1);
+  saveTokenStore(store);
+  onDelete?.(deleted);
+  sendJson(res, 200, { ok: true, id });
 }

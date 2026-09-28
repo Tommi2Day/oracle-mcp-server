@@ -80,6 +80,12 @@ retries without the snapshot on ORA-01466 (freshly created objects), always roll
 `execute` uses `autoCommit`, returns `DBMS_OUTPUT` for PL/SQL. DATE/TIMESTAMP are formatted from local
 components (driver maps them to local time), TZ types as ISO UTC.
 
+### Code quality (SonarQube)
+
+Keep the cognitive complexity of every function below 15 (Sonar S3776, also for the script in `admin.html`) — split
+into helpers instead of growing `switch`/`if` chains (HTTP routes: `GET_ROUTES` in `index.ts`, admin API: one handler
+per method in `lib.ts`). `ci:test` writes `coverage/lcov.info`, which the Sonar job picks up.
+
 ### Logging
 
 Same line format as pg-mcp-server (`[ts] [LEVEL] [CATEGORY] …`), documented in `docs/logging.md`.
