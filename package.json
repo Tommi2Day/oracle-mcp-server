@@ -26,7 +26,7 @@
     "test:watch": "vitest",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "version": "node --input-type=commonjs -e \"const fs=require('fs'),v=process.env.npm_new_version;const a=JSON.parse(fs.readFileSync('openapi.json'));a.info.version=v;fs.writeFileSync('openapi.json',JSON.stringify(a,null,2)+'\n');let c=fs.readFileSync('helm/oracle-mcp-server/Chart.yaml','utf8');c=c.replace(/^version: .+/m,'version: '+v).replace(/^appVersion: .+/m,'appVersion: \\\"'+v+'\\\"');fs.writeFileSync('helm/oracle-mcp-server/Chart.yaml',c);\" && git add openapi.json helm/oracle-mcp-server/Chart.yaml",
+    "version": "node --input-type=commonjs -e \"const fs=require('fs'),v=process.env.npm_new_version;const a=JSON.parse(fs.readFileSync('openapi.json'));a.info.version=v;fs.writeFileSync('openapi.json',JSON.stringify(a,null,2)+'\\n');let c=fs.readFileSync('helm/oracle-mcp-server/Chart.yaml','utf8');c=c.replace(/^version: .+/m,'version: '+v).replace(/^appVersion: .+/m,'appVersion: \\\"'+v+'\\\"');fs.writeFileSync('helm/oracle-mcp-server/Chart.yaml',c);\" && git add openapi.json helm/oracle-mcp-server/Chart.yaml",
     "ci:build": "tsc -p tsconfig.build.json",
     "ci:test": "vitest run --coverage --coverage.reporter=text-summary --coverage.reporter=lcov",
     "ci:lint": "eslint .",
