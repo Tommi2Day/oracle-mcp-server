@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Docker image based on Debian 13 (`node:25-trixie-slim`) instead of Debian 12: critical CVEs of the base image
+  (GnuTLS, Perl) are only fixed in trixie; `apt-get upgrade` adds the security updates released after the base
+  image. Thin and thick mode (Instant Client with `libaio1t64`) unchanged
 - Internal refactoring to keep the cognitive complexity of every function below 15 (Sonar rule S3776): the HTTP
   router, MCP session start/resume, the admin token API, connect string parsing/merging, `awr_top_events`, startup
   and the admin UI form builder are split into small functions. No change in behavior, API or log output
