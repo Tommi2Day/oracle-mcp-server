@@ -355,6 +355,18 @@ describe("handleRequest", () => {
     expect(resBody(res)).toEqual({ status: "ok", tls: false });
   });
 
+  it("sets security headers on every response", async () => {
+    const res = makeRes();
+    await handleRequest(makeReq("GET", "/health"), res);
+    const headers = Object.fromEntries((res.setHeader as unknown as { mock: { calls: string[][] } }).mock.calls);
+    expect(headers).toEqual({
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Referrer-Policy": "no-referrer",
+      "Cache-Control": "no-store",
+    });
+  });
+
   it("GET /info describes the default connection without password", async () => {
     const res = makeRes();
     await handleRequest(makeReq("GET", "/info"), res);

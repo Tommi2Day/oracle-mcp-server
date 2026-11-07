@@ -24,7 +24,7 @@ export function makeReq(method: string, url: string,
 
 /** Creates a mock response object. */
 export function makeRes(): MockRes {
-  return { writeHead: vi.fn(), end: vi.fn(), headersSent: false } as unknown as MockRes;
+  return { writeHead: vi.fn(), setHeader: vi.fn(), end: vi.fn(), headersSent: false } as unknown as MockRes;
 }
 
 /** Parses the JSON body from res.end.mock.calls[0][0]. */

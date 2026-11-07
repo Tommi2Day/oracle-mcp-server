@@ -558,6 +558,12 @@ function rejectClientConnection(req: http.IncomingMessage, res: http.ServerRespo
 
 // ── Request handler (shared by both HTTP and HTTPS) ───────────────────────────
 export async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  // Hardening for the admin UI / API responses: no MIME sniffing, no framing (clickjacking),
+  // no referrer leakage, and tokens / connection data are never cached.
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cache-Control", "no-store");
   try {
     await _handleRequest(req, res);
   } catch (err) {
