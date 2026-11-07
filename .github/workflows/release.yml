@@ -193,6 +193,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --generate-notes
+          # Release notes: the CHANGELOG.md section of this version, followed by the generated notes
+          awk -v v="$TAG" '/^## \[/ { p = (index($0, "[" v "]") > 0); next } p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ -s "$RUNNER_TEMP/notes.md" ]; then
+            gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+          else
+            echo "::warning::No CHANGELOG.md section for $TAG, using generated notes only"
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
