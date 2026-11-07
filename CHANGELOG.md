@@ -5,6 +5,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-07
+
+### Security
+
+- All HTTP responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer` and `Cache-Control: no-store` (admin UI clickjacking protection; token and
+  connection data are not cached by browsers or proxies).
+- Updated dependencies (`vitest` / `@vitest/coverage-v8` 5.1, `npm audit fix` for zod, vite and source-map-js);
+  `npm audit` reports 0 vulnerabilities.
+- `package.json` overrides `minimatch` to `^11.0.5` (GHSA-g3hv-75wg-m249, pulled in by eslint; dev only).
+- Docker image no longer ships npm/npx/corepack (unused at runtime, carried CVEs in bundled packages); production
+  dependencies are installed in a separate build stage.
+- Docker image is based on `node:24-trixie-slim` (Node.js 24 LTS) instead of `node:25-trixie-slim`; Node 25 is not
+  an LTS release and no longer receives updates. Matches the Node version used in CI and `scripts/`.
+
+### Changed
+
+- `@types/node` is pinned to the Node.js 24 line (`^24`) to match the runtime; Dependabot no longer proposes major
+  updates of the `node` Docker image or `@types/node`.
+- Release workflow: the GitHub release notes start with the matching `CHANGELOG.md` section, followed by the
+  generated notes.
+
 ## [0.3.1] - 2026-09-28
 
 ### Changed
