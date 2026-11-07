@@ -1,14 +1,20 @@
 # ── Build stage: compile TypeScript ───────────────────────────────────────────
-FROM node:25-trixie-slim AS build
+FROM node:24-trixie-slim AS build
 WORKDIR /build
 COPY package.json package-lock.json tsconfig.json tsconfig.build.json ./
 RUN npm ci --ignore-scripts
 COPY src ./src
 RUN npm run build
 
+# ── Production dependencies (npm stays in this stage, not in the runtime image) ─
+FROM node:24-trixie-slim AS deps
+WORKDIR /deps
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 # Debian 13 (trixie, glibc) base so the optional Oracle Instant Client (thick mode) can run.
-FROM node:25-trixie-slim
+FROM node:24-trixie-slim
 
 # ORACLE_THICK=true installs Oracle Instant Client (basic lite) for thick mode
 # (ORA_DRIVER_MODE=thick): needed for sqlnet.ora settings, cwallet.sso auto-login
@@ -33,10 +39,14 @@ RUN apt-get update \
     fi \
  && rm -rf /var/lib/apt/lists/*
 
+# npm/npx/corepack are not needed at runtime (and carry their own bundled-package CVEs)
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
 WORKDIR /app
 
 COPY package.json package-lock.json /app/
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY --from=deps /deps/node_modules /app/node_modules
 COPY --from=build /build/dist /app/dist
 COPY admin.html docker-entrypoint.sh /app/
 RUN chmod +x /app/docker-entrypoint.sh \
