@@ -589,6 +589,16 @@ Line format, all categories and keys, and ready-to-use Filebeat / Logstash confi
 
 ## Kubernetes / Helm
 
+The chart is published as an OCI artifact on GitHub Container Registry (one chart version per release, chart
+version = app version):
+
+```bash
+helm install oracle-mcp oci://ghcr.io/tommi2day/charts/oracle-mcp-server --version 0.3.2 -n mcp …
+helm show values oci://ghcr.io/tommi2day/charts/oracle-mcp-server --version 0.3.2
+```
+
+Or install from a checkout of this repository:
+
 ```bash
 kubectl create namespace mcp
 kubectl -n mcp create secret generic oracle-tns-admin --from-file=tnsnames.ora --from-file=ewallet.pem

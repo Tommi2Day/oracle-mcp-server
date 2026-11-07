@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The Helm chart is published to GitHub Container Registry on every release and can be installed with
+  `helm install oracle-mcp oci://ghcr.io/tommi2day/charts/oracle-mcp-server --version <version>`. New workflow
+  `helm-chart.yml` (called by the release workflow, also runnable manually for an existing tag).
+
 ## [0.3.2] - 2026-11-07
 
 ### Security
