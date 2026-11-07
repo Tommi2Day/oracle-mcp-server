@@ -5,19 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- Helm: `image.tag` defaults to the chart `appVersion` instead of `latest`, so a chart version deploys its matching
-  image. Set `image.tag` explicitly for the `-thick` variant or to keep following `latest`.
-  `scripts/helm_install.sh` only passes `image.tag` when `IMAGE_TAG` is set.
+## [0.3.2] - 2026-11-07
 
 ### Added
 
 - The Helm chart is published to GitHub Container Registry on every release and can be installed with
   `helm install oracle-mcp oci://ghcr.io/tommi2day/charts/oracle-mcp-server --version <version>`. New workflow
   `helm-chart.yml` (called by the release workflow, also runnable manually for an existing tag).
-
-## [0.3.2] - 2026-11-07
 
 ### Security
 
@@ -34,6 +28,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Helm: `image.tag` defaults to the chart `appVersion` instead of `latest`, so a chart version deploys its matching
+  image. Set `image.tag` explicitly for the `-thick` variant or to keep following `latest`.
+  `scripts/helm_install.sh` only passes `image.tag` when `IMAGE_TAG` is set.
 - `@types/node` is pinned to the Node.js 24 line (`^24`) to match the runtime; Dependabot no longer proposes major
   updates of the `node` Docker image or `@types/node`.
 - Release workflow: the GitHub release notes start with the matching `CHANGELOG.md` section, followed by the
