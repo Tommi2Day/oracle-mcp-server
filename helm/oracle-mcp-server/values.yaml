@@ -1,7 +1,7 @@
 # ── Image ─────────────────────────────────────────────────────────────────────
 image:
   repository: tommi2day/oracle-mcp-server
-  tag: ""   # default: the chart appVersion (e.g. "0.3.2"); thick mode: "<appVersion>-thick"; "latest" follows the newest release
+  tag: ""   # default: the chart appVersion (e.g. "1.0.0"); thick mode: "<appVersion>-thick"; "latest" follows the newest release
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -52,7 +52,8 @@ oracle:
   maxRows: 200
 
   # Performance analysis tools
-  #   perfTools       – explain_plan, sql_plan, top_sql, session_activity, table_stats
+  #   perfTools       – explain_plan, sql_plan, top_sql, session_activity, table_stats, db_overview, locks,
+  #                     alert_log, incidents, trace_files, trace_content (log tools need extra grants)
   #                     (no extra licence; need SELECT_CATALOG_ROLE or SELECT ANY DICTIONARY)
   #   diagnosticsPack – ash_top, awr_top_events: only enable with an Oracle Diagnostics Pack licence
   #   tuningPack      – sql_monitor: only enable with an Oracle Tuning Pack licence

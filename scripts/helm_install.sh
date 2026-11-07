@@ -11,7 +11,7 @@ RELEASE="${RELEASE:-oracle-mcp}"
 NAMESPACE="${NAMESPACE:-mcp}"
 CHART="${CHART:-./helm/oracle-mcp-server}"
 IMAGE_REPO="${IMAGE_REPO:-tommi2day/oracle-mcp-server}"
-# Empty: the chart default (its appVersion). Set e.g. latest or 0.3.2-thick to override.
+# Empty: the chart default (its appVersion). Set e.g. latest or 1.0.0-thick to override.
 IMAGE_TAG="${IMAGE_TAG:-}"
 # Additional values files, separated by spaces (e.g. "helm/values-prod.yaml")
 HELM_VALUES_FILES="${HELM_VALUES_FILES:-}"

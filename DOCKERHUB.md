@@ -54,9 +54,17 @@ In Kubernetes mount them from a Secret/ConfigMap (Helm chart: `tnsAdmin.existing
 `query` (read-only SELECT), `execute` (DML/DDL/PL/SQL with DBMS_OUTPUT), `list_tables`, `describe_table`,
 `list_schemas`, `test_connection`.
 
-Performance analysis: `explain_plan`, `sql_plan`, `top_sql`, `session_activity`, `table_stats`; with
+Performance analysis: `explain_plan`, `sql_plan`, `top_sql`, `session_activity`, `table_stats`, `db_overview`,
+`locks`, `alert_log`, `incidents`, `trace_files`, `trace_content`; with
 `ORA_DIAGNOSTICS_PACK=true` also `ash_top`, `awr_top_events`, with `ORA_TUNING_PACK=true` `sql_monitor`.
 Licensed tools are **off by default** and can be switched per token.
+
+## Claude skills
+
+Six ready-made [Claude Code skills](https://github.com/Tommi2Day/oracle-mcp-server/blob/main/docs/skills.md) in the
+repository's `skills/` directory use these tools for typical DBA questions: database status ("what is my database
+doing?"), top sessions and SQL, problem detection (locks, waits), SQL tuning, schema documentation and error
+analysis with alert log and trace files. Read-only; copy them to `~/.claude/skills`.
 
 ## Admin UI
 

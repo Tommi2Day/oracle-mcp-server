@@ -28,6 +28,8 @@ docker build --build-arg ORACLE_THICK=true -t oracle-mcp-server:thick .   # Inst
   `validateConnection`, `toSafeToken` (secrets never returned; `password_set` flags).
 - **`src/index.ts`** — MCP tools, pool cache, HTTP routing, startup. `isMain` guard keeps imports side-effect free.
 - **`src/perf.ts`** — performance tools (`PERF_TOOLS` with a `feature` each: `perf`, `diagnostics`, `tuning`).
+  The unlicensed group includes `db_overview`, `locks` and the log tools (`alert_log`, `incidents`, `trace_files`,
+  `trace_content`; privilege-gated via `MCP_PERF_LOG_ROLE`, trace output is sensitive and capped).
   `perfToolList(features)` filters ListTools, `runPerfTool` re-checks the feature (`assertPerfToolEnabled`), sets
   `ACTION=mcp-perf:<tool>` (excluded in `top_sql`) and adds a privilege hint to ORA-00942/01031.
 - **Session tags** — `withConnection` calls `tagSession` on every pool checkout: MODULE = `MCP_SERVER_NAME`,
@@ -41,6 +43,8 @@ docker build --build-arg ORACLE_THICK=true -t oracle-mcp-server:thick .   # Inst
 - **`src/branding.ts`** — admin UI branding: `loadAdminBranding` (`ADMIN_THEME_CSS`, `ADMIN_LOGO` → data URI or URL),
   `renderAdminHtml` fills `__SERVER_NAME__` (escaped), `<!--theme-->` and the `<!--logo-->…<!--/logo-->` markers.
   All colors in `admin.html` are `:root` CSS variables — don't add hard-coded colors; example in `examples/admin-theme/`.
+- **`skills/`** — Claude Code skills (`SKILL.md` per directory) that drive the tools; keep tool names, parameters and
+  workflows in sync with `src/perf.ts`; documented in `docs/skills.md`.
 - **`scripts/sql/grant_perf_privileges.sql`** — grants for the perf tools; keep its object lists and the privilege
   table in `docs/performance.md` in sync with the views queried in `src/perf.ts`.
 - **`admin.html`** — single-file admin SPA (from pg-mcp-server, connection form adapted to Oracle fields).

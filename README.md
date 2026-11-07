@@ -12,9 +12,11 @@ other MCP clients) access to **Oracle Database** — the Oracle sibling of
 
 ## Features
 
-- **14 tools:** schema browsing (`list_schemas`, `list_tables`, `describe_table`), read-only `query`, `execute` for
-  DML/DDL/PL/SQL with `DBMS_OUTPUT`, and performance analysis (execution plans, top SQL, sessions, optimizer
-  statistics; ASH/AWR and SQL Monitor only when the packs are licensed) — [details](#tools)
+- **20 tools:** schema browsing (`list_schemas`, `list_tables`, `describe_table`), read-only `query`, `execute` for
+  DML/DDL/PL/SQL with `DBMS_OUTPUT`, and performance analysis (execution plans, top SQL, sessions, locks, optimizer
+  statistics, alert log and trace files; ASH/AWR and SQL Monitor only when the packs are licensed) — [details](#tools)
+- **Claude skills:** six ready-made workflows — database status, top sessions and SQL, problem detection, SQL
+  tuning, documentation and error analysis incl. alert and trace logs — [details](#claude-skills)
 - **Safe reads:** `query` runs in `SET TRANSACTION READ ONLY` and is always rolled back, so Oracle itself rejects
   writes; only `SELECT`/`WITH` are accepted (DDL would commit implicitly); results capped at 200 rows
   (`ORA_MAX_ROWS`) to keep the LLM context small
@@ -70,6 +72,7 @@ any Oracle Database (on-premises, cloud, container) — self-hosted, with no Ora
 - [Tokens & per-token connections](#tokens--per-token-connections)
 - [Logging](#logging)
 - [Kubernetes / Helm](#kubernetes--helm)
+- [Claude skills](#claude-skills)
 - [Claude configuration](#claude-configuration)
 - [Development](#development)
 
@@ -101,9 +104,18 @@ A trailing `;` on SQL statements and a trailing SQL*Plus `/` on PL/SQL blocks ar
 | `top_sql` | Top statements from `V$SQLAREA` by elapsed, CPU, buffer gets, disk reads, executions or elapsed per execution; filter by schema / text. | – |
 | `session_activity` | Active sessions (`V$SESSION`) with sql_id, wait event and blocker, plus top non-idle wait events since startup. | – |
 | `table_stats` | Table, index and column optimizer statistics incl. staleness, clustering factor and histograms. | – |
+| `db_overview` | "What is my database doing": instance, load of the last minute, sessions, CPU vs. wait classes, attention points. | – |
+| `locks` | Blocked sessions, root blockers (status, idle time, waiters), locked objects; suggests but never runs `KILL SESSION`. | – |
+| `alert_log` | Alert log via `V$DIAG_ALERT_EXT`: recent entries, only errors, or containing a text; shows the trace file of an error. | – (log privileges) |
+| `incidents` | ADR incidents (`V$DIAG_INCIDENT`, `V$DIAG_PROBLEM`): time, error code, problem key. | – (log privileges) |
+| `trace_files`, `trace_content` | List and read trace files (`V$DIAG_TRACE_FILE[_CONTENTS]`), head/tail/filter. May contain SQL text and data. | – (log privileges) |
 | `ash_top` | Active Session History of the last N minutes grouped by sql_id, event, wait class, session or module. | **Diagnostics Pack** |
 | `awr_top_events` | DB time, DB CPU and top wait events between the first and last AWR snapshot of the last N hours. | **Diagnostics Pack** |
 | `sql_monitor` | Recent monitored executions (`V$SQL_MONITOR`) or the text report of one `sql_id`. | **Tuning Pack** |
+
+The alert log and trace tools need the optional log privileges (`@grant_perf_privileges.sql <user> MINIMAL N N Y`,
+role `MCP_PERF_LOG_ROLE`, or `SELECT_CATALOG_ROLE`); without them they answer with a privilege hint.
+The [Claude skills](#claude-skills) combine these tools into ready-made workflows.
 
 **Licensed features are disabled by default.** Tools that need an Oracle management pack are neither listed to
 the client nor executable unless enabled:
@@ -123,9 +135,9 @@ If the database itself has `CONTROL_MANAGEMENT_PACK_ACCESS` set to `NONE`, the t
 > database side if pack usage must be prevented technically.
 
 Privileges: the unlicensed tools except `explain_plan` read dynamic performance views. Run
-`scripts/sql/grant_perf_privileges.sql <user> [MINIMAL|CATALOG] [diagnostics Y|N] [tuning Y|N]` as SYS — in
-`MINIMAL` mode it creates separate roles for the unlicensed tools and each pack, so licensed views are only
-reachable where the pack is granted. Errors caused by missing privileges include a hint.
+`scripts/sql/grant_perf_privileges.sql <user> [MINIMAL|CATALOG] [diagnostics Y|N] [tuning Y|N] [logs Y|N]` as SYS — in
+`MINIMAL` mode it creates separate roles for the unlicensed tools, each pack and the alert log / trace tools, so
+licensed views are only reachable where the pack is granted. Errors caused by missing privileges include a hint.
 **Full documentation of the tools, privileges and the grant script: [docs/performance.md](docs/performance.md).** In a PDB, `awr_top_events` uses the PDB's own snapshots (`AWR_PDB_AUTOFLUSH_ENABLED=TRUE`) and
 otherwise falls back to CDB root snapshots where their statistics are visible.
 
@@ -593,8 +605,8 @@ The chart is published as an OCI artifact on GitHub Container Registry (one char
 version = app version):
 
 ```bash
-helm install oracle-mcp oci://ghcr.io/tommi2day/charts/oracle-mcp-server --version 0.3.2 -n mcp …
-helm show values oci://ghcr.io/tommi2day/charts/oracle-mcp-server --version 0.3.2
+helm install oracle-mcp oci://ghcr.io/tommi2day/charts/oracle-mcp-server --version 1.0.0 -n mcp …
+helm show values oci://ghcr.io/tommi2day/charts/oracle-mcp-server --version 1.0.0
 ```
 
 Or install from a checkout of this repository:
@@ -615,7 +627,7 @@ helm install oracle-mcp ./helm/oracle-mcp-server -n mcp \
 Key values (see `helm/oracle-mcp-server/values.yaml`):
 
 - `image.tag` defaults to the chart's `appVersion`, so each chart version deploys its matching image; for thick mode
-  use `<version>-thick` (e.g. `0.3.2-thick`), `latest` follows the newest release
+  use `<version>-thick` (e.g. `1.0.0-thick`), `latest` follows the newest release
 - `oracle.connectString` / `oracle.tnsAlias` / `oracle.host|port|serviceName|sid|protocol`, `oracle.user`
 - `oracle.password` or `oracle.existingSecret` (keys `password`, optional `walletPassword`)
 - `oracle.driverMode` (`thick` requires the `-thick` image), `oracle.sslServerDnMatch`, `oracle.sslServerCertDn`, `oracle.tlsCaFile`
@@ -627,6 +639,31 @@ Key values (see `helm/oracle-mcp-server/values.yaml`):
 - `oracle.clientConnection` (`ORA_CLIENT_CONNECTION` for the admin token), `adminUi.*` (branding)
 
 `scripts/helm_install.sh` wraps a typical install.
+
+---
+
+## Claude skills
+
+The `skills/` directory holds [Claude Code skills](docs/skills.md) that use the tools above for typical DBA questions.
+They are read-only, base every finding on tool output and use licensed tools (ASH/AWR, SQL Monitor) only when the
+server lists them.
+
+| Skill | Ask for … |
+|-------|-----------|
+| `oracle-db-status` | "What is my database doing?" — health and load at a glance |
+| `oracle-top-sessions-sql` | top sessions and top SQL (CPU, time, I/O, executions) |
+| `oracle-problem-detection` | locks, deadlocks, waits, saturation, long-running calls |
+| `oracle-sql-tuning` | why a statement is slow: plan, statistics, indexes, verified recommendations |
+| `oracle-document` | schema / data model documentation (ERD), incident and tuning write-ups |
+| `oracle-error-analysis` | ORA- errors: alert log → incident → trace file → cause |
+
+```bash
+cp -r skills/* ~/.claude/skills/      # all projects; or <project>/.claude/skills/
+```
+
+Windows PowerShell: `Copy-Item -Recurse skills\* $env:USERPROFILE\.claude\skills\`.
+The error analysis needs the optional log privileges (`grant_perf_privileges.sql <user> MINIMAL N N Y`). Details,
+required privileges and the safety design: [docs/skills.md](docs/skills.md).
 
 ---
 
@@ -666,7 +703,7 @@ docker build --build-arg ORACLE_THICK=true -t oracle-mcp-server:thick .  # with 
 Source layout: `src/oracle.ts` (connect strings, JDBC parsing, pool attributes, wallets — pure),
 `src/lib.ts` (logging, auth, token store, admin API), `src/perf.ts` (performance tools and licence gating),
 `src/format.ts` (result formatting), `src/index.ts` (MCP tools, HTTP routing, startup).
-Log format: see [docs/logging.md](docs/logging.md). Performance tools: [docs/performance.md](docs/performance.md).
+Log format: see [docs/logging.md](docs/logging.md). Performance tools: [docs/performance.md](docs/performance.md). Claude skills: [docs/skills.md](docs/skills.md).
 
 ---
 

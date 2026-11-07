@@ -25,6 +25,11 @@ for databases that are licensed for the pack.
 | `top_sql` | Most expensive statements in the shared pool | – | `ORA_PERF_TOOLS` |
 | `session_activity` | Current sessions, waits, blockers, top wait events | – | `ORA_PERF_TOOLS` |
 | `table_stats` | Optimizer statistics of a table, its indexes and columns | – | `ORA_PERF_TOOLS` |
+| `db_overview` | Instance, load of the last minute, sessions, CPU vs. wait classes, attention points | – | `ORA_PERF_TOOLS` |
+| `locks` | Blocked sessions, root blockers, held locks | – | `ORA_PERF_TOOLS` |
+| `alert_log` | Alert log (`V$DIAG_ALERT_EXT`) | – | `ORA_PERF_TOOLS` + log privileges |
+| `incidents` | ADR incidents and problems | – | `ORA_PERF_TOOLS` + log privileges |
+| `trace_files` / `trace_content` | List / read trace files | – | `ORA_PERF_TOOLS` + log privileges |
 | `ash_top` | Active Session History (`V$ACTIVE_SESSION_HISTORY`) | **Diagnostics Pack** | `ORA_DIAGNOSTICS_PACK` |
 | `awr_top_events` | DB time / DB CPU / wait events between AWR snapshots (`DBA_HIST_*`) | **Diagnostics Pack** | `ORA_DIAGNOSTICS_PACK` |
 | `sql_monitor` | Real-Time SQL Monitoring (`V$SQL_MONITOR`, `DBMS_SQLTUNE.REPORT_SQL_MONITOR`) | **Tuning Pack** | `ORA_TUNING_PACK` |
@@ -79,6 +84,11 @@ Disabled tools are **not listed** to MCP clients, and a direct call is rejected 
 | `sql_plan` | `V$SQL`, `V$SQL_PLAN`, `V$SQL_PLAN_STATISTICS_ALL`, `V$SESSION` | `SELECT` on these views |
 | `top_sql` | `V$SQLAREA` | `SELECT` |
 | `session_activity` | `V$SESSION`, `V$SYSTEM_EVENT` | `SELECT` |
+| `db_overview` | `V$INSTANCE`, `V$SESSION`, `V$SYSMETRIC` (PDB: `V$CON_SYSMETRIC`), `V$OSSTAT` | `SELECT` (metrics and `V$OSSTAT` are optional: the tool degrades without them) |
+| `locks` | `V$SESSION`, `V$LOCKED_OBJECT`, `ALL_OBJECTS` | `SELECT` |
+| `alert_log` | `V$DIAG_ALERT_EXT` | `SELECT` (log role) |
+| `incidents` | `V$DIAG_INCIDENT`, `V$DIAG_PROBLEM` | `SELECT` (log role) |
+| `trace_files`, `trace_content` | `V$DIAG_TRACE_FILE`, `V$DIAG_TRACE_FILE_CONTENTS` | `SELECT` (log role) |
 | `ash_top` | `V$ACTIVE_SESSION_HISTORY`, `ALL_USERS` | `SELECT` on `V$ACTIVE_SESSION_HISTORY` |
 | `awr_top_events` | `DBA_HIST_SNAPSHOT`, `DBA_HIST_SYS_TIME_MODEL`, `DBA_HIST_SYSTEM_EVENT` (in a PDB also `AWR_ROOT_*`) | `SELECT` |
 | `sql_monitor` | `V$SQL_MONITOR`, `V$SQL_PLAN_MONITOR`, `DBMS_SQLTUNE` | `SELECT`, `EXECUTE ON DBMS_SQLTUNE` |
@@ -87,6 +97,9 @@ Disabled tools are **not listed** to MCP clients, and a direct call is rejected 
 Notes:
 
 - V$ views are public synonyms for `SYS.V_$…` views — grants go on `SYS.V_$SQLAREA` etc.
+- **`SELECT_CATALOG_ROLE` does not include `V$DIAG_ALERT_EXT` and `V$DIAG_INCIDENT`** (tested on 23ai: ORA-00942).
+  The log tools therefore always need the log grants (`logs = Y` in the grant script, role `MCP_PERF_LOG_ROLE`),
+  also in `CATALOG` mode. They are separate from the other roles because trace files can contain SQL text and data.
 - `DBMS_SQLTUNE` is invoker-rights and usually executable by `PUBLIC`; without `SELECT` on
   `V$SQL_MONITOR` / `V$SQL_PLAN_MONITOR` the report contains only its title. `sql_monitor` detects that.
 - Privileges may come from roles — see [Roles vs. direct grants](#roles-vs-direct-grants).
@@ -105,7 +118,7 @@ functions, packages, and views owned by a user). The server never runs such code
 
 | Tool call | Executed as | Roles effective |
 |-----------|-------------|-----------------|
-| `top_sql`, `session_activity`, `table_stats`, `ash_top`, `awr_top_events`, `sql_monitor` (list) | plain SQL | yes |
+| `top_sql`, `session_activity`, `table_stats`, `db_overview`, `locks`, `alert_log`, `incidents`, `trace_files`, `trace_content`, `ash_top`, `awr_top_events`, `sql_monitor` (list) | plain SQL | yes |
 | `explain_plan` | `EXECUTE IMMEDIATE` in an anonymous PL/SQL block | yes (anonymous blocks keep roles) |
 | `sql_plan` | `DBMS_XPLAN.DISPLAY_CURSOR` — invoker rights | yes |
 | `sql_monitor` (report) | `DBMS_SQLTUNE.REPORT_SQL_MONITOR` — invoker rights (`AUTHID CURRENT_USER`) | yes |
@@ -147,30 +160,42 @@ SQL> ALTER SESSION SET CONTAINER = FREEPDB1;                -- multitenant: swit
 SQL> @scripts/sql/grant_perf_privileges.sql MCP             -- unlicensed tools only
 SQL> @scripts/sql/grant_perf_privileges.sql MCP MINIMAL Y Y -- + Diagnostics and Tuning Pack
 SQL> @scripts/sql/grant_perf_privileges.sql MCP MINIMAL Y N -- + Diagnostics Pack only
+SQL> @scripts/sql/grant_perf_privileges.sql MCP MINIMAL N N Y -- + alert log, incidents, trace files
 SQL> @scripts/sql/grant_perf_privileges.sql MCP CATALOG     -- SELECT_CATALOG_ROLE instead
+SQL> @scripts/sql/grant_perf_privileges.sql MCP CATALOG N N Y -- SELECT_CATALOG_ROLE + log views
 ```
 
-Parameters: `<user> [mode] [diagnostics Y|N] [tuning Y|N]`.
+Parameters: `<user> [mode] [diagnostics Y|N] [tuning Y|N] [logs Y|N]` — all optional except the user;
+`mode` is `MINIMAL` (default) or `CATALOG`, the three switches default to `N`.
+
+| Parameter | Effect |
+|-----------|--------|
+| `user` | database user of the MCP server (unquoted names are upper-cased, `"Quoted"` names stay as given) |
+| `mode` | `MINIMAL`: roles with `SELECT` on exactly the views the tools use; `CATALOG`: `SELECT_CATALOG_ROLE` |
+| `diagnostics` | `Y`: also the Diagnostics Pack views (`ash_top`, `awr_top_events`) — only with a licence |
+| `tuning` | `Y`: also the Tuning Pack objects (`sql_monitor`) — only with a licence |
+| `logs` | `Y`: also alert log, incidents and trace files (`alert_log`, `incidents`, `trace_files`, `trace_content`) |
 
 ### MINIMAL mode (default, recommended)
 
-Creates up to three roles and grants the ones requested to the user:
+Creates up to four roles and grants the ones requested to the user:
 
 | Role | Created / granted | Contents |
 |------|-------------------|----------|
-| `MCP_PERF_ROLE` | always | `SELECT` on `V_$SQL`, `V_$SQL_PLAN`, `V_$SQL_PLAN_STATISTICS_ALL`, `V_$SESSION`, `V_$SQLAREA`, `V_$SYSTEM_EVENT` |
+| `MCP_PERF_ROLE` | always | `SELECT` on `V_$SQL`, `V_$SQL_PLAN`, `V_$SQL_PLAN_STATISTICS_ALL`, `V_$SESSION`, `V_$SQLAREA`, `V_$SYSTEM_EVENT`, `V_$INSTANCE`, `V_$SYSMETRIC`, `V_$CON_SYSMETRIC` (optional, 12.1+ PDB metrics), `V_$OSSTAT`, `V_$LOCKED_OBJECT` |
+| `MCP_PERF_LOG_ROLE` | with `logs = Y` | `SELECT` on `V_$DIAG_ALERT_EXT`, `V_$DIAG_INCIDENT`, `V_$DIAG_PROBLEM`, `V_$DIAG_TRACE_FILE`, `V_$DIAG_TRACE_FILE_CONTENTS` |
 | `MCP_PERF_DIAG_ROLE` | with `diagnostics = Y` | `SELECT` on `V_$ACTIVE_SESSION_HISTORY`, `DBA_HIST_SNAPSHOT`, `DBA_HIST_SYS_TIME_MODEL`, `DBA_HIST_SYSTEM_EVENT`, `AWR_ROOT_SNAPSHOT`, `AWR_ROOT_SYS_TIME_MODEL`, `AWR_ROOT_SYSTEM_EVENT`, `V_$PARAMETER` |
 | `MCP_PERF_TUNING_ROLE` | with `tuning = Y` | `SELECT` on `V_$SQL_MONITOR`, `V_$SQL_PLAN_MONITOR`, `V_$PARAMETER`; `EXECUTE` on `DBMS_SQLTUNE` |
 
-The script **sets the desired state**: running it with `diagnostics = N` (or `tuning = N`) revokes a
-previously granted pack role from that user. The pack roles are separate, so a licensed user never widens
+The script **sets the desired state**: running it with `diagnostics = N`, `tuning = N` or `logs = N` revokes a
+previously granted pack or log role from that user. The pack roles are separate, so a licensed user never widens
 the access of an unlicensed one. Objects that do not exist in older releases (`AWR_ROOT_*` before 12.2) are
 reported as `SKIP`; the script is safe to run repeatedly.
 
 Example output:
 
 ```text
-oracle-mcp-server performance privileges for MCP – mode MINIMAL, Diagnostics Pack Y, Tuning Pack N
+oracle-mcp-server performance privileges for MCP – mode MINIMAL, Diagnostics Pack Y, Tuning Pack N, logs N
 
 OK    CREATE ROLE MCP_PERF_ROLE
 OK    GRANT SELECT ON SYS.V_$SQL TO MCP_PERF_ROLE
@@ -191,10 +216,13 @@ Grants `SELECT_CATALOG_ROLE` (and `EXECUTE ON DBMS_SQLTUNE` with `tuning = Y`). 
 gives read access to the whole data dictionary **including the pack-licensed views**; pack usage is then
 only prevented by the server switches.
 
+`SELECT_CATALOG_ROLE` does **not** include `V$DIAG_ALERT_EXT` and `V$DIAG_INCIDENT`. With `logs = Y` the script
+therefore creates and grants `MCP_PERF_LOG_ROLE` in `CATALOG` mode as well.
+
 ### Revoking
 
 ```sql
-SQL> @scripts/sql/revoke_perf_privileges.sql MCP        -- revoke the roles / SELECT_CATALOG_ROLE from MCP
+SQL> @scripts/sql/revoke_perf_privileges.sql MCP        -- revoke all MCP_PERF_* roles / SELECT_CATALOG_ROLE from MCP
 SQL> @scripts/sql/revoke_perf_privileges.sql MCP Y      -- … and drop the MCP_PERF_* roles
 ```
 
@@ -210,6 +238,17 @@ GRANT SELECT ON SYS.V_$SQL_PLAN_STATISTICS_ALL TO mcp;
 GRANT SELECT ON SYS.V_$SESSION                TO mcp;
 GRANT SELECT ON SYS.V_$SQLAREA                TO mcp;
 GRANT SELECT ON SYS.V_$SYSTEM_EVENT           TO mcp;
+GRANT SELECT ON SYS.V_$INSTANCE               TO mcp;   -- db_overview
+GRANT SELECT ON SYS.V_$SYSMETRIC              TO mcp;   -- db_overview
+GRANT SELECT ON SYS.V_$CON_SYSMETRIC          TO mcp;   -- db_overview, PDB metrics (optional)
+GRANT SELECT ON SYS.V_$OSSTAT                 TO mcp;   -- db_overview, CPU count (optional)
+GRANT SELECT ON SYS.V_$LOCKED_OBJECT          TO mcp;   -- locks
+-- alert log, incidents, trace files (trace files can contain SQL text and data)
+GRANT SELECT ON SYS.V_$DIAG_ALERT_EXT         TO mcp;
+GRANT SELECT ON SYS.V_$DIAG_INCIDENT          TO mcp;
+GRANT SELECT ON SYS.V_$DIAG_PROBLEM           TO mcp;
+GRANT SELECT ON SYS.V_$DIAG_TRACE_FILE        TO mcp;
+GRANT SELECT ON SYS.V_$DIAG_TRACE_FILE_CONTENTS TO mcp;
 -- Diagnostics Pack (only when licensed)
 GRANT SELECT ON SYS.V_$ACTIVE_SESSION_HISTORY TO mcp;
 GRANT SELECT ON SYS.DBA_HIST_SNAPSHOT         TO mcp;
@@ -228,6 +267,8 @@ GRANT SELECT ON SYS.V_$PARAMETER              TO mcp;
 
 The privilege matrix was verified with every tool on Oracle Database 23ai Free (in a PDB) for users with
 no grants, `MINIMAL` without packs, `MINIMAL` with the Tuning Pack only, `MINIMAL` with both packs, and `CATALOG`.
+The log grants were verified separately on 23ai Free: `MINIMAL` with `logs = Y`, `CATALOG` with `logs = Y` (all five log
+views readable), `MINIMAL` without logs (`ORA-00942` on `V$DIAG_ALERT_EXT`, as intended) and the revoke script.
 
 ---
 
@@ -322,6 +363,70 @@ Shows rows, blocks, sample size, last analyzed, **stale** and **locked** flags (
 stale statistics), all indexes with columns, B-tree level, leaf blocks, distinct keys, clustering factor,
 status and visibility, and per-column distinct values, nulls, density, buckets and histogram type.
 
+### db_overview
+
+No parameters. Instance, version, uptime and container; load of the last minute (`V$SYSMETRIC`: average active
+sessions, host CPU, executions/s, logical and physical reads, redo, response time — in a PDB without data it falls back to
+`V$CON_SYSMETRIC` and then to the session sample); user sessions (total / active / blocked / longest active call);
+active sessions by CPU or wait class; and **attention points** with the tool to use next (blocked sessions, calls
+over 5 minutes, average active sessions above the CPU count, host CPU ≥ 90%).
+
+### locks
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `limit` | 20 | max. blocked sessions, max. 100 |
+
+Three tables: blocked sessions (`BLOCKER`, `ROOT` = final blocker, event, wait seconds, locked object from
+`ROW_WAIT_OBJ#`), root blockers (status, seconds since last call, number of waiters, current and previous `sql_id`,
+machine, module, program) and the locks the blockers hold (`V$LOCKED_OBJECT`). An `INACTIVE` blocker is reported as an
+uncommitted transaction in an idle client. The `ALTER SYSTEM KILL SESSION` statement is printed as a last resort
+and **never executed**. Without blocked sessions the tool says so and points to the alert log for deadlocks
+(ORA-00060). Single instance (`V$` views).
+
+### alert_log
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `minutes` | 60 | window, max. 43200 (30 days) |
+| `errors_only` | `false` | only entries with `ORA-`, `TNS-` or `CRS-` codes |
+| `contains` | – | case-insensitive substring of the message |
+| `limit` | 50 | newest entries, max. 200; printed oldest first |
+
+Reads `V$DIAG_ALERT_EXT` (11.2+); in a PDB the entries of that container. The `TRACE_FILE` column is the file named
+in an "Errors in file …" entry — pass it to `trace_content`. `PROBLEM_KEY` links an entry to an incident.
+
+### incidents
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `days` | 7 | window, max. 365 |
+| `limit` | 10 | max. 100 |
+
+Incident id, creation time, open/closed, error code (`ORA-00600`), first two error arguments, problem key,
+signalling component and flood control flag (`V$DIAG_INCIDENT` joined to `V$DIAG_PROBLEM`).
+
+### trace_files
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `name_like` | – | substring of the file name (ospid, `pmon`, `ora`, incident number) |
+| `minutes` | all | only files modified in the last N minutes |
+| `limit` | 20 | max. 100 |
+
+### trace_content
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `file` | required | trace file name; a path (e.g. from the alert log) is reduced to the base name; only `A-Z a-z 0-9 _ . -` are accepted |
+| `position` | `tail` | `tail` (last lines) or `head` (first lines — incident traces start with the error stack) |
+| `lines` | 200 | max. 2000 |
+| `contains` | – | case-insensitive substring, applied before head/tail |
+| `context` | 0 | with `contains`: lines before and after each match, like `grep -C` (max. 50); `--` separates distant blocks |
+
+Output is capped at 100 000 characters. **Trace files can contain SQL text, bind values and data** — the output says so;
+grant the log role only to users whose MCP clients may see that, and do not copy trace content into tickets or documents.
+
 ### ash_top — Diagnostics Pack
 
 | Parameter | Default | Description |
@@ -380,8 +485,15 @@ or I/O, or when they carry the `/*+ MONITOR */` hint.
 3. `table_stats` for the tables with bad estimates (stale / missing statistics, missing histograms, index clustering)
 4. `explain_plan` to check a rewritten statement or hints before running it
 
+**What is the database doing?**
+- `db_overview` → load, sessions, wait classes and attention points; follow the suggested tool
+
 **Something is blocking**
-- `session_activity` → blocked sessions first, `BLOCKER` shows the SID holding the lock
+- `locks` → waiters, root blockers, held locks; `session_activity` shows the same `BLOCKER` column per session
+
+**An error occurred**
+- `alert_log` (`errors_only`) → `TRACE_FILE` / `PROBLEM_KEY` → `incidents` → `trace_files` → `trace_content`
+  (`head`, `contains: "ORA-"`) → `sql_plan` for the `sql_id` in the trace
 
 **The database was slow (licensed)**
 - `ash_top` with `group_by: "wait_class"` → then `event` / `sql_id` for the last minutes
