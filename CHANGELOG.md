@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [1.0.0] - 2026-11-07
 
-First stable release. From here on the MCP tools and their parameters, the admin REST API (`openapi.json`), the
+First complete version. From here on the MCP tools and their parameters, the admin REST API (`openapi.json`), the
 environment variables, the log format and the Helm values follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Compared with 0.3.2 it adds database diagnostics (what is my database doing, locks, alert log, trace files) and ready-made
 Claude skills on top of the existing tools.
