@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Helm: `image.tag` defaults to the chart `appVersion` instead of `latest`, so a chart version deploys its matching
+  image. Set `image.tag` explicitly for the `-thick` variant or to keep following `latest`.
+  `scripts/helm_install.sh` only passes `image.tag` when `IMAGE_TAG` is set.
+
 ### Added
 
 - The Helm chart is published to GitHub Container Registry on every release and can be installed with

@@ -614,6 +614,8 @@ helm install oracle-mcp ./helm/oracle-mcp-server -n mcp \
 
 Key values (see `helm/oracle-mcp-server/values.yaml`):
 
+- `image.tag` defaults to the chart's `appVersion`, so each chart version deploys its matching image; for thick mode
+  use `<version>-thick` (e.g. `0.3.2-thick`), `latest` follows the newest release
 - `oracle.connectString` / `oracle.tnsAlias` / `oracle.host|port|serviceName|sid|protocol`, `oracle.user`
 - `oracle.password` or `oracle.existingSecret` (keys `password`, optional `walletPassword`)
 - `oracle.driverMode` (`thick` requires the `-thick` image), `oracle.sslServerDnMatch`, `oracle.sslServerCertDn`, `oracle.tlsCaFile`

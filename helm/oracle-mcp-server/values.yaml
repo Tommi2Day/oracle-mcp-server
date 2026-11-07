@@ -1,7 +1,7 @@
 # ── Image ─────────────────────────────────────────────────────────────────────
 image:
   repository: tommi2day/oracle-mcp-server
-  tag: "latest"
+  tag: ""   # default: the chart appVersion (e.g. "0.3.2"); thick mode: "<appVersion>-thick"; "latest" follows the newest release
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

@@ -11,7 +11,8 @@ RELEASE="${RELEASE:-oracle-mcp}"
 NAMESPACE="${NAMESPACE:-mcp}"
 CHART="${CHART:-./helm/oracle-mcp-server}"
 IMAGE_REPO="${IMAGE_REPO:-tommi2day/oracle-mcp-server}"
-IMAGE_TAG="${IMAGE_TAG:-latest}"
+# Empty: the chart default (its appVersion). Set e.g. latest or 0.3.2-thick to override.
+IMAGE_TAG="${IMAGE_TAG:-}"
 # Additional values files, separated by spaces (e.g. "helm/values-prod.yaml")
 HELM_VALUES_FILES="${HELM_VALUES_FILES:-}"
 
@@ -38,12 +39,12 @@ AUTH_TOKEN="${AUTH_TOKEN:-$(openssl rand -hex 32)}"
 VALUES_ARGS=()
 for f in ${HELM_VALUES_FILES}; do VALUES_ARGS+=(-f "$f"); done
 [ -n "$TNS_ADMIN_SECRET" ] && VALUES_ARGS+=(--set tnsAdmin.existingSecret="${TNS_ADMIN_SECRET}")
+[ -n "$IMAGE_TAG" ] && VALUES_ARGS+=(--set image.tag="${IMAGE_TAG}")
 
 helm upgrade --install "${RELEASE}" "${CHART}" \
   --namespace "${NAMESPACE}" --create-namespace \
   "${VALUES_ARGS[@]}" \
   --set image.repository="${IMAGE_REPO}" \
-  --set image.tag="${IMAGE_TAG}" \
   --set-string oracle.connectString="${ORA_CONNECT_STRING}" \
   --set-string oracle.tnsAlias="${ORA_TNS_ALIAS}" \
   --set-string oracle.host="${ORA_HOST}" \
