@@ -5,6 +5,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-07
+
+First stable release. From here on the MCP tools and their parameters, the admin REST API (`openapi.json`), the
+environment variables, the log format and the Helm values follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Compared with 0.3.2 it adds database diagnostics (what is my database doing, locks, alert log, trace files) and ready-made
+Claude skills on top of the existing tools.
+
+### Added
+
+- Claude skills in `skills/` (install: copy to `~/.claude/skills`, see `docs/skills.md`): `oracle-db-status` ("what is
+  my database doing"), `oracle-top-sessions-sql`, `oracle-problem-detection` (locks, waits, saturation),
+  `oracle-sql-tuning`, `oracle-document` (schema documentation, incident / tuning write-ups) and
+  `oracle-error-analysis` (alert log, incidents, trace files). Read-only, evidence-based, licence-aware.
+- Tools for the skills (unlicensed, `ORA_PERF_TOOLS`): `db_overview` (instance, load, sessions, CPU vs. wait classes,
+  attention points), `locks` (blocked sessions, root blockers, held locks; prints but never runs `KILL SESSION`),
+  `alert_log` (`V$DIAG_ALERT_EXT`), `incidents` (`V$DIAG_INCIDENT` / `V$DIAG_PROBLEM`), `trace_files` and
+  `trace_content` (`V$DIAG_TRACE_FILE[_CONTENTS]`; head/tail, text filter with `grep -C`-style `context`, output capped, name
+  validated). `locks` also shows the module of the root blockers.
+- `grant_perf_privileges.sql` takes a fifth parameter `logs` (`MCP_PERF_LOG_ROLE`: alert log, incidents, trace files)
+  and grants the views of `db_overview` / `locks` (`V$INSTANCE`, `V$SYSMETRIC`, `V$CON_SYSMETRIC`, `V$OSSTAT`,
+  `V$LOCKED_OBJECT`) to `MCP_PERF_ROLE`; `revoke_perf_privileges.sql` removes the log role. `SELECT_CATALOG_ROLE` does
+  not include `V$DIAG_ALERT_EXT` / `V$DIAG_INCIDENT`, so `logs = Y` is also needed in `CATALOG` mode.
+
 ## [0.3.2] - 2026-11-07
 
 ### Added
