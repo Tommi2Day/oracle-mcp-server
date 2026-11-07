@@ -32,7 +32,7 @@ describe("feature switches", () => {
   });
   it("perfToolList filters by feature", () => {
     expect(perfToolList({ perf: true, diagnostics: false, tuning: false }).map(t => t.name))
-      .toEqual(["explain_plan", "sql_plan", "top_sql", "session_activity", "table_stats"]);
+      .toEqual(["explain_plan", "sql_plan", "top_sql", "session_activity", "table_stats", "db_overview", "locks", "alert_log", "incidents", "trace_files", "trace_content"]);
     expect(perfToolList(ALL)).toHaveLength(PERF_TOOLS.length);
     expect(perfToolList(ALL)[0]).not.toHaveProperty("feature");
   });
@@ -124,6 +124,163 @@ describe("session_activity", () => {
     expect(out).toContain("Sessions (2 active, 1 blocked):");
     expect(out).toContain("enq: TX - row lock contention");
     expect(out).toContain("db file sequential read");
+  });
+});
+
+describe("db_overview", () => {
+  const INSTANCE = { INSTANCE_NAME: "FREE", VERSION: "23.0.0.0.0", STATUS: "OPEN", HOST_NAME: "db1", STARTUP: "2026-11-01 08:00:00", UPTIME_DAYS: 6.1, CON_NAME: "FREEPDB1" };
+
+  it("summarises instance, load, sessions and flags blocked sessions", async () => {
+    conn.execute
+      .mockResolvedValueOnce({ rows: [INSTANCE] })
+      .mockResolvedValueOnce({ rows: [{ TOTAL: 12, ACTIVE: 3, BLOCKED: 2, LONGEST_ACTIVE_S: 40 }] })
+      .mockResolvedValueOnce({ rows: [{ WHAT: "Application", SESSIONS: 2 }, { WHAT: "CPU", SESSIONS: 1 }] })
+      .mockResolvedValueOnce({ rows: [{ METRIC_NAME: "Average Active Sessions", VALUE: 3, METRIC_UNIT: "Active Sessions" }] })
+      .mockResolvedValueOnce({ rows: [{ VALUE: 2 }] }); // V$OSSTAT NUM_CPUS
+    const out = await run("db_overview");
+    expect(out).toContain("Instance FREE (23.0.0.0.0, OPEN) on db1 — container FREEPDB1");
+    expect(out).toContain("12 total, 3 active, 2 blocked");
+    expect(out).toContain("Application");
+    expect(out).toContain("2 session(s) are blocked → run the locks tool");
+    expect(out).toContain("Average active sessions (3) exceed the CPU count (2)");
+  });
+
+  it("falls back to V$CON_SYSMETRIC and to the session sample when no metrics are visible", async () => {
+    conn.execute
+      .mockResolvedValueOnce({ rows: [INSTANCE] })
+      .mockResolvedValueOnce({ rows: [{ TOTAL: 0, ACTIVE: 0, BLOCKED: 0, LONGEST_ACTIVE_S: 0 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })                                          // V$SYSMETRIC empty
+      .mockRejectedValueOnce(new Error("ORA-00942: table or view does not exist"))  // V$CON_SYSMETRIC not granted
+      .mockRejectedValueOnce(new Error("ORA-00942: table or view does not exist")); // V$OSSTAT not granted
+    const out = await run("db_overview");
+    expect(sqlOf(4)).toContain("v$con_sysmetric");
+    expect(out).toContain("Load metrics: not available in this container");
+    expect(out).toContain("No active user sessions right now.");
+    expect(out).toContain("nothing unusual");
+  });
+
+  it("flags long running calls and high host CPU", async () => {
+    conn.execute
+      .mockResolvedValueOnce({ rows: [INSTANCE] })
+      .mockResolvedValueOnce({ rows: [{ TOTAL: 1, ACTIVE: 1, BLOCKED: 0, LONGEST_ACTIVE_S: 900 }] })
+      .mockResolvedValueOnce({ rows: [{ WHAT: "CPU", SESSIONS: 1 }] })
+      .mockResolvedValueOnce({ rows: [{ METRIC_NAME: "Host CPU Utilization (%)", VALUE: 95, METRIC_UNIT: "%" }] })
+      .mockResolvedValueOnce({ rows: [{ VALUE: 8 }] });
+    const out = await run("db_overview");
+    expect(out).toContain("running for 900 s");
+    expect(out).toContain("Host CPU utilisation is 95%");
+  });
+});
+
+describe("locks", () => {
+  it("reports when nothing is blocked and points to the alert log for deadlocks", async () => {
+    conn.execute.mockResolvedValueOnce({ rows: [] });
+    const out = await run("locks");
+    expect(bindsOf(0)).toEqual({ n: 20 });
+    expect(out).toMatch(/No blocked sessions/);
+    expect(out).toContain("ORA-00060");
+    expect(conn.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows waiters, root blockers, held locks, an idle-holder diagnosis and an unexecuted kill statement", async () => {
+    conn.execute
+      .mockResolvedValueOnce({ rows: [{ SID: 58, SERIAL: 7, USERNAME: "APP", EVENT: "enq: TX - row lock contention", WAIT_S: 42, BLOCKER: 221, ROOT_BLOCKER: 221, SQL_ID: "5kqtcyq6s8thu", LOCKED_OBJECT: "APP.ORDERS", MODULE: "web" }] })
+      .mockResolvedValueOnce({ rows: [{ SID: 221, SERIAL: 25578, USERNAME: "BATCH", STATUS: "INACTIVE", IDLE_S: 600, WAITERS: 1, PREV_SQL_ID: "cnd0n49dfh7xa", MACHINE: "app01", MODULE: "nightly-batch", PROGRAM: "job" }] })
+      .mockResolvedValueOnce({ rows: [{ SID: 221, USERNAME: "BATCH", OBJECT_NAME: "APP.ORDERS", LOCK_MODE: "row exclusive" }] });
+    const out = await run("locks", { limit: 5 });
+    expect(bindsOf(0)).toEqual({ n: 5 });
+    expect(out).toContain("APP.ORDERS");
+    expect(out).toContain("row exclusive");
+    expect(out).toContain("SID 221 is INACTIVE for 600 s");
+    expect(out).toContain("(BATCH @ app01, module nightly-batch)");
+    expect(out).toContain("ALTER SYSTEM KILL SESSION '221,25578' IMMEDIATE;");
+    expect(out).toContain("NOT executed");
+    // the tool itself only ever runs SELECTs
+    for (let i = 0; i < conn.execute.mock.calls.length; i++) expect(sqlOf(i)).not.toMatch(/ALTER SYSTEM/);
+  });
+});
+
+describe("alert_log, incidents, trace files", () => {
+  it("alert_log binds the window and filters and lists oldest first with the trace file", async () => {
+    conn.execute.mockResolvedValueOnce({ rows: [
+      { TS: "2026-11-07 10:02:00 +00:00", LVL: 1, PROBLEM_KEY: "ORA 600", TRACE_FILE: "FREE_ora_9.trc", MSG: "Errors in file /x/FREE_ora_9.trc:" },
+      { TS: "2026-11-07 10:01:00 +00:00", LVL: 16, MSG: "earlier" },
+    ] });
+    const out = await run("alert_log", { minutes: 999999, errors_only: true, contains: "ORA-", limit: 500 });
+    expect(bindsOf(0)).toEqual({ minutes: 43200, errors: 1, pattern: "ORA-", n: 200 });
+    expect(sqlOf(0)).toContain("v$diag_alert_ext");
+    expect(out.indexOf("earlier")).toBeLessThan(out.indexOf("Errors in file"));
+    expect(out).toContain("FREE_ora_9.trc");
+  });
+  it("alert_log reports empty windows and adds the privilege hint on ORA-00942", async () => {
+    conn.execute.mockResolvedValueOnce({ rows: [] });
+    expect(await run("alert_log", { errors_only: true })).toMatch(/No alert log entries in the last 60 minutes with error codes/);
+    conn.execute.mockRejectedValueOnce(new Error("ORA-00942: table or view does not exist"));
+    await expect(run("alert_log")).rejects.toThrow(/grant_perf_privileges/);
+  });
+  it("incidents lists recent incidents", async () => {
+    conn.execute.mockResolvedValueOnce({ rows: [{ INCIDENT_ID: 1234, CREATED: "2026-11-07", STATE: "open", ERROR: "ORA-00600", ERROR_ARG1: "kcbz_check", PROBLEM_KEY: "ORA 600 [kcbz_check]", COMPONENT: "RDBMS", FLOOD: 0 }] });
+    const out = await run("incidents", { days: 3 });
+    expect(bindsOf(0)).toEqual({ days: 3, n: 10 });
+    expect(out).toContain("ORA 600 [kcbz_check]");
+    conn.execute.mockResolvedValueOnce({ rows: [] });
+    expect(await run("incidents")).toMatch(/No diagnostic incidents in the last 7 days/);
+  });
+  it("trace_files filters by name and age", async () => {
+    conn.execute.mockResolvedValueOnce({ rows: [{ TRACE_FILENAME: "FREE_pmon_1.trc", MODIFIED: "2026-11-07" }] });
+    const out = await run("trace_files", { name_like: "pmon", minutes: 30, limit: 3 });
+    expect(bindsOf(0)).toEqual({ minutes: 30, pattern: "pmon", n: 3 });
+    expect(out).toContain("FREE_pmon_1.trc");
+    conn.execute.mockResolvedValueOnce({ rows: [] });
+    expect(await run("trace_files")).toBe("No matching trace files.");
+    expect(bindsOf(1)).toEqual({ minutes: null, pattern: null, n: 20 });
+  });
+});
+
+describe("trace_content", () => {
+  it("reads the tail by default, reduces a path to the file name and binds everything", async () => {
+    conn.execute.mockResolvedValueOnce({ rows: [
+      { RN: 499, PAYLOAD: "line 499\n", TOTAL: 500 }, { RN: 500, PAYLOAD: "line 500", TOTAL: 500 },
+    ] });
+    const out = await run("trace_content", { file: "/u01/app/diag/trace/FREE_ora_9.trc", lines: 2 });
+    expect(conn.execute).toHaveBeenCalledTimes(1);
+    expect(bindsOf(0)).toEqual({ f: "FREE_ora_9.trc", pattern: null, ctx: 0, tail: 1, n: 2 });
+    expect(sqlOf(0)).toContain("v$diag_trace_file_contents");
+    expect(out).toContain("tail 2 of 500 lines");
+    expect(out).toContain("treat as sensitive");
+    expect(out).toContain("line 499\nline 500");
+    expect(out).not.toContain("--");
+  });
+  it("reads the head and applies a text filter", async () => {
+    conn.execute.mockResolvedValueOnce({ rows: [{ RN: 7, PAYLOAD: "ORA-00600: internal error", TOTAL: 1 }] });
+    const out = await run("trace_content", { file: "x.trc", position: "head", contains: "ORA-", lines: 50 });
+    expect(bindsOf(0)).toEqual({ f: "x.trc", pattern: "ORA-", ctx: 0, tail: 0, n: 50 });
+    expect(out).toContain('head 1 of 1 lines containing "ORA-"');
+  });
+  it("adds context around matches, separates distant blocks and clamps the context", async () => {
+    conn.execute.mockResolvedValueOnce({ rows: [
+      { RN: 9, PAYLOAD: "before", TOTAL: 4 }, { RN: 10, PAYLOAD: "Deadlock graph:", TOTAL: 4 },
+      { RN: 40, PAYLOAD: "second block", TOTAL: 4 }, { RN: 41, PAYLOAD: "Deadlock graph again", TOTAL: 4 },
+    ] });
+    const out = await run("trace_content", { file: "x.trc", contains: "Deadlock graph", context: 999 });
+    expect(bindsOf(0)).toMatchObject({ pattern: "Deadlock graph", ctx: 50 });
+    expect(out).toContain('containing "Deadlock graph" (±50 lines of context)');
+    expect(out).toContain("Deadlock graph:\n--\nsecond block");
+  });
+  it("rejects unsafe file names and positions without touching the database", async () => {
+    await expect(run("trace_content", { file: "x;drop table t" })).rejects.toThrow(/Invalid trace file name/);
+    await expect(run("trace_content", { file: "" })).rejects.toThrow(/Invalid trace file name/);
+    await expect(run("trace_content", { file: "x.trc", position: "middle" })).rejects.toThrow(/Invalid position/);
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+  it("explains empty results and cuts very long output", async () => {
+    conn.execute.mockResolvedValueOnce({ rows: [] });
+    expect(await run("trace_content", { file: "gone.trc" })).toMatch(/No lines found in trace file gone.trc/);
+    conn.execute.mockResolvedValueOnce({ rows: [{ RN: 1, PAYLOAD: "x".repeat(150_000), TOTAL: 1 }] });
+    const out = await run("trace_content", { file: "big.trc" });
+    expect(out).toContain("output cut to 100000 characters");
+    expect(out.length).toBeLessThan(101_000);
   });
 });
 

@@ -119,7 +119,7 @@ describe("getPool", () => {
 // ── Tools ─────────────────────────────────────────────────────────────────────
 describe("MCP tools", () => {
   const BASE_TOOLS = ["query", "execute", "list_tables", "describe_table", "list_schemas", "test_connection"];
-  const PERF = ["explain_plan", "sql_plan", "top_sql", "session_activity", "table_stats"];
+  const PERF = ["explain_plan", "sql_plan", "top_sql", "session_activity", "table_stats", "db_overview", "locks", "alert_log", "incidents", "trace_files", "trace_content"];
 
   it("lists base and unlicensed performance tools by default", async () => {
     createMcpServer(async () => mockPool as any);
