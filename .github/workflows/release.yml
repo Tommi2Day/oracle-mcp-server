@@ -36,7 +36,7 @@ jobs:
 
       - name: Update package.json, openapi.json and Chart.yaml
         run: |
-          npm version "${{ inputs.tag }}" --no-git-tag-version
+          npm version "${{ inputs.tag }}" --no-git-tag-version --allow-same-version
           node --input-type=commonjs -e "
             const fs = require('fs'), v = '${{ inputs.tag }}';
             const a = JSON.parse(fs.readFileSync('openapi.json'));
@@ -53,8 +53,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json openapi.json helm/oracle-mcp-server/Chart.yaml
-          git commit -m "chore: bump version to ${{ inputs.tag }}"
-          git push
+          # Re-releasing an existing version leaves nothing to commit
+          if git diff --cached --quiet; then
+            echo "Version files already at ${{ inputs.tag }}"
+          else
+            git commit -m "chore: bump version to ${{ inputs.tag }}"
+            git push
+          fi
 
   lint-and-test:
     name: Lint & Test
