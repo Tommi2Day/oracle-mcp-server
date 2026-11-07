@@ -23,7 +23,7 @@ DEFINE mcp_drop = "&2"
 
 DECLARE
   TYPE t_roles IS TABLE OF VARCHAR2(30);
-  c_roles CONSTANT t_roles := t_roles('MCP_PERF_ROLE', 'MCP_PERF_DIAG_ROLE', 'MCP_PERF_TUNING_ROLE');
+  c_roles CONSTANT t_roles := t_roles('MCP_PERF_ROLE', 'MCP_PERF_DIAG_ROLE', 'MCP_PERF_TUNING_ROLE', 'MCP_PERF_LOG_ROLE');
   v_user VARCHAR2(128) := '&mcp_user';
   v_drop BOOLEAN       := UPPER(NVL('&mcp_drop', 'N')) IN ('Y', 'YES', 'TRUE', '1');
 

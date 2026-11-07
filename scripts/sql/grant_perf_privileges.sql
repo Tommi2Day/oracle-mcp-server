@@ -6,11 +6,12 @@
 --
 -- Usage (SQL*Plus / SQLcl, as SYS or another user allowed to grant on SYS objects):
 --
---   @grant_perf_privileges.sql <user> [mode] [diagnostics] [tuning]
+--   @grant_perf_privileges.sql <user> [mode] [diagnostics] [tuning] [logs]
 --
 --   user         database user of the MCP server (unquoted names are upper-cased)
 --   mode         MINIMAL (default) – roles with SELECT on exactly the views the tools use:
---                                    MCP_PERF_ROLE        unlicensed tools
+--                                    MCP_PERF_ROLE        unlicensed tools (incl. db_overview, locks)
+--                                    MCP_PERF_LOG_ROLE    alert log, incidents, trace files
 --                                    MCP_PERF_DIAG_ROLE   Diagnostics Pack tools
 --                                    MCP_PERF_TUNING_ROLE Tuning Pack tools
 --                CATALOG           – SELECT_CATALOG_ROLE (broad read access to the
@@ -19,12 +20,18 @@
 --                                    (ASH, AWR). Only with a Diagnostics Pack licence!
 --   tuning       Y | N (default N) – also grant the Tuning Pack objects
 --                                    (SQL Monitor). Only with a Tuning Pack licence!
+--   logs         Y | N (default N) – also grant read access to the alert log, incidents and trace
+--                                    files (alert_log, incidents, trace_files, trace_content).
+--                                    Trace files can contain SQL text and data values.
+--                                    Needed in CATALOG mode too: SELECT_CATALOG_ROLE does not
+--                                    include V$DIAG_ALERT_EXT / V$DIAG_INCIDENT.
 --
 -- Examples:
 --   sqlplus / as sysdba
 --   SQL> ALTER SESSION SET CONTAINER = FREEPDB1;        -- multitenant: run in the PDB
 --   SQL> @grant_perf_privileges.sql MCP
 --   SQL> @grant_perf_privileges.sql MCP MINIMAL Y Y
+--   SQL> @grant_perf_privileges.sql MCP MINIMAL N N Y
 --   SQL> @grant_perf_privileges.sql MCP CATALOG
 --
 -- The script sets the desired state and is idempotent: running it with
@@ -41,21 +48,25 @@ SET VERIFY OFF FEEDBACK OFF LINESIZE 200 SERVEROUTPUT ON SIZE UNLIMITED FORMAT W
 COLUMN 2 NEW_VALUE 2 NOPRINT
 COLUMN 3 NEW_VALUE 3 NOPRINT
 COLUMN 4 NEW_VALUE 4 NOPRINT
-SELECT '' "2", '' "3", '' "4" FROM dual WHERE 1 = 0;
+COLUMN 5 NEW_VALUE 5 NOPRINT
+SELECT '' "2", '' "3", '' "4", '' "5" FROM dual WHERE 1 = 0;
 
 DEFINE mcp_user     = "&1"
 DEFINE mcp_mode     = "&2"
 DEFINE mcp_diag     = "&3"
 DEFINE mcp_tuning   = "&4"
+DEFINE mcp_logs     = "&5"
 
 DECLARE
   c_role   CONSTANT VARCHAR2(30) := 'MCP_PERF_ROLE';
   c_diag   CONSTANT VARCHAR2(30) := 'MCP_PERF_DIAG_ROLE';
   c_tuning CONSTANT VARCHAR2(30) := 'MCP_PERF_TUNING_ROLE';
+  c_log    CONSTANT VARCHAR2(30) := 'MCP_PERF_LOG_ROLE';
   v_user   VARCHAR2(128) := '&mcp_user';
   v_mode   VARCHAR2(10)  := UPPER(NVL('&mcp_mode', 'MINIMAL'));
   v_diag   BOOLEAN       := UPPER(NVL('&mcp_diag', 'N')) IN ('Y', 'YES', 'TRUE', '1');
   v_tuning BOOLEAN       := UPPER(NVL('&mcp_tuning', 'N')) IN ('Y', 'YES', 'TRUE', '1');
+  v_logs   BOOLEAN       := UPPER(NVL('&mcp_logs', 'N')) IN ('Y', 'YES', 'TRUE', '1');
   v_cnt    PLS_INTEGER;
   v_errors PLS_INTEGER := 0;
 
@@ -118,7 +129,8 @@ BEGIN
   DBMS_OUTPUT.PUT_LINE('oracle-mcp-server performance privileges for ' || v_user
     || ' – mode ' || v_mode
     || ', Diagnostics Pack ' || CASE WHEN v_diag THEN 'Y' ELSE 'N' END
-    || ', Tuning Pack ' || CASE WHEN v_tuning THEN 'Y' ELSE 'N' END);
+    || ', Tuning Pack ' || CASE WHEN v_tuning THEN 'Y' ELSE 'N' END
+    || ', logs ' || CASE WHEN v_logs THEN 'Y' ELSE 'N' END);
   DBMS_OUTPUT.PUT_LINE('');
 
   IF v_mode = 'CATALOG' THEN
@@ -129,6 +141,8 @@ BEGIN
     IF v_tuning THEN
       run('GRANT EXECUTE ON SYS.DBMS_SQLTUNE TO "' || v_user || '"');
     END IF;
+    -- NOTE: SELECT_CATALOG_ROLE does not include V$DIAG_ALERT_EXT / V$DIAG_INCIDENT; the log views
+    -- are granted below through MCP_PERF_LOG_ROLE in both modes when logs = Y
   ELSE
     ensure_role(c_role);
 
@@ -144,6 +158,13 @@ BEGIN
     grant_select('V_$SQLAREA', c_role);
     -- session_activity (V$SESSION above)
     grant_select('V_$SYSTEM_EVENT', c_role);
+    -- db_overview
+    grant_select('V_$INSTANCE', c_role);
+    grant_select('V_$SYSMETRIC', c_role);
+    grant_select('V_$CON_SYSMETRIC', c_role, TRUE);
+    grant_select('V_$OSSTAT', c_role);
+    -- locks (V$SESSION above)
+    grant_select('V_$LOCKED_OBJECT', c_role);
     set_role(c_role, TRUE);
 
     -- Diagnostics Pack: ash_top, awr_top_events (role only created when requested)
@@ -173,11 +194,22 @@ BEGIN
     set_role(c_tuning, v_tuning);
   END IF;
 
+  -- alert_log, incidents, trace_files, trace_content (role only created when requested)
+  IF v_logs THEN
+    ensure_role(c_log);
+    grant_select('V_$DIAG_ALERT_EXT', c_log);
+    grant_select('V_$DIAG_INCIDENT', c_log);
+    grant_select('V_$DIAG_PROBLEM', c_log);
+    grant_select('V_$DIAG_TRACE_FILE', c_log);
+    grant_select('V_$DIAG_TRACE_FILE_CONTENTS', c_log);
+  END IF;
+  set_role(c_log, v_logs);
+
   -- roles only work in SQL if they are default roles of the user
   SELECT COUNT(*) INTO v_cnt
     FROM dba_role_privs
    WHERE grantee = v_user
-     AND granted_role IN ('SELECT_CATALOG_ROLE', c_role, c_diag, c_tuning)
+     AND granted_role IN ('SELECT_CATALOG_ROLE', c_role, c_diag, c_tuning, c_log)
      AND default_role = 'NO';
   IF v_cnt > 0 THEN
     DBMS_OUTPUT.PUT_LINE('WARN  the role is not a default role of ' || v_user
@@ -197,5 +229,5 @@ BEGIN
 END;
 /
 
-UNDEFINE 1 2 3 4 mcp_user mcp_mode mcp_diag mcp_tuning
+UNDEFINE 1 2 3 4 5 mcp_user mcp_mode mcp_diag mcp_tuning mcp_logs
 SET VERIFY ON FEEDBACK ON
