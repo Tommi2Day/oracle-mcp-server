@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Updated the Oracle driver `oracledb` to 26.0.0 (`@types/oracledb` 26.0.1, `globals` 17.14); verified against Oracle
+  Free 23ai in thin mode (all tools, session tags). Node.js 14.17+ is still sufficient for the driver.
 - Helm: `image.tag` defaults to the chart `appVersion` instead of `latest`, so a chart version deploys its matching
   image. Set `image.tag` explicitly for the `-thick` variant or to keep following `latest`.
   `scripts/helm_install.sh` only passes `image.tag` when `IMAGE_TAG` is set.
