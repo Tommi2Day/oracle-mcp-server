@@ -903,6 +903,14 @@ async function traceContent(conn: oracledb.Connection, args: Args): Promise<stri
       ORDER BY rn`,
     { f: file, pattern, ctx, tail: position === "tail" ? 1 : 0, n });
   if (!data.length) return `No lines found in trace file ${file}${pattern ? ` containing "${pattern}"` : ""} (wrong name, no access, or empty).`;
+  const { text, note } = limitTraceText(joinTraceLines(data, pattern), position);
+  const filter = pattern ? ` containing "${pattern}"${ctx ? ` (±${ctx} lines of context)` : ""}` : "";
+  return `Trace file ${file}: ${position} ${data.length} of ${data[0].TOTAL} lines${filter}\n`
+    + "(may contain SQL text and data — treat as sensitive)\n\n" + text + note;
+}
+
+/** Joins the selected trace lines; a "--" separator marks gaps between matches of a text filter. */
+function joinTraceLines(data: Row[], pattern: string | null): string {
   let prev = Number(data[0].RN) - 1;
   const lines: string[] = [];
   for (const r of data) {
@@ -910,15 +918,14 @@ async function traceContent(conn: oracledb.Connection, args: Args): Promise<stri
     prev = Number(r.RN);
     lines.push(String(r.PAYLOAD ?? "").replace(/\r?\n$/, ""));
   }
-  let text = lines.join("\n");
-  let note = "";
-  if (text.length > TRACE_OUTPUT_LIMIT) {
-    text = position === "tail" ? text.slice(-TRACE_OUTPUT_LIMIT) : text.slice(0, TRACE_OUTPUT_LIMIT);
-    note = `\n(output cut to ${TRACE_OUTPUT_LIMIT} characters)`;
-  }
-  const filter = pattern ? ` containing "${pattern}"${ctx ? ` (±${ctx} lines of context)` : ""}` : "";
-  return `Trace file ${file}: ${position} ${data.length} of ${data[0].TOTAL} lines${filter}\n`
-    + "(may contain SQL text and data — treat as sensitive)\n\n" + text + note;
+  return lines.join("\n");
+}
+
+/** Caps the trace output at TRACE_OUTPUT_LIMIT characters (tail keeps the end, head the start). */
+function limitTraceText(text: string, position: string): { text: string; note: string } {
+  if (text.length <= TRACE_OUTPUT_LIMIT) return { text, note: "" };
+  const cut = position === "tail" ? text.slice(-TRACE_OUTPUT_LIMIT) : text.slice(0, TRACE_OUTPUT_LIMIT);
+  return { text: cut, note: `\n(output cut to ${TRACE_OUTPUT_LIMIT} characters)` };
 }
 
 const HANDLERS: Record<string, (conn: oracledb.Connection, args: Args) => Promise<string>> = {
