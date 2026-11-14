@@ -665,6 +665,22 @@ OAUTH_ADMIN_GROUPS=<admin-group-object-id>  OAUTH_ALLOWED_GROUPS=<user-group-obj
 MCP clients can send such a token as a header or log in by themselves ([client setup](docs/oauth.md#mcp-clients)).
 Full reference, Entra setup steps and security notes: [docs/oauth.md](docs/oauth.md).
 
+Users and groups are assigned to connections in the admin UI (*OAuth assignments*):
+
+<table>
+  <tr>
+    <td width="35%" valign="top"><b>Login with single sign-on</b> next to the token login<br><img src="docs/images/admin-sso-login.png" alt="Admin UI: login with single sign-on button"></td>
+    <td width="65%" valign="top"><b>OAuth assignments</b> — groups and users mapped to a default connection; <i>environment</i> entries come from <code>OAUTH_*</code> and are read-only<br><img src="docs/images/admin-assignments.png" alt="Admin UI: OAuth assignments"></td>
+  </tr>
+</table>
+
+<details>
+<summary>Edit assignment: user, admin role, client-supplied connection and default connection</summary>
+
+<img src="docs/images/admin-assignment-edit.png" width="420" alt="Admin UI: edit assignment">
+
+</details>
+
 ---
 
 ## Logging

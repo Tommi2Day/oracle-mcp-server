@@ -79,6 +79,24 @@ variables) — see [Admin UI branding](https://github.com/Tommi2Day/oracle-mcp-s
 
 ![Admin UI with corporate logo and colors](https://raw.githubusercontent.com/Tommi2Day/oracle-mcp-server/main/docs/images/admin-branding.png)
 
+## OAuth assignments
+
+With `OAUTH_ISSUER` set, the admin UI offers single sign-on and assigns groups and users to database connections:
+
+<table>
+  <tr>
+    <td width="35%" valign="top"><b>Login with single sign-on</b> next to the token login<br><img src="https://raw.githubusercontent.com/Tommi2Day/oracle-mcp-server/main/docs/images/admin-sso-login.png" alt="Admin UI: login with single sign-on button"></td>
+    <td width="65%" valign="top"><b>OAuth assignments</b> — groups and users mapped to a default connection; <i>environment</i> entries come from <code>OAUTH_*</code> and are read-only<br><img src="https://raw.githubusercontent.com/Tommi2Day/oracle-mcp-server/main/docs/images/admin-assignments.png" alt="Admin UI: OAuth assignments"></td>
+  </tr>
+</table>
+
+<details>
+<summary>Edit assignment: user, admin role, client-supplied connection and default connection</summary>
+
+<img src="https://raw.githubusercontent.com/Tommi2Day/oracle-mcp-server/main/docs/images/admin-assignment-edit.png" width="420" alt="Admin UI: edit assignment">
+
+</details>
+
 ## Audit logging
 
 All activity is written to stderr (`docker logs oracle-mcp-server`): tool calls, session start/stop, rejected logins

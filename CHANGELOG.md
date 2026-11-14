@@ -68,6 +68,7 @@ bearer tokens, and the skills and OAuth path are now tested against real contain
 
 ### Documentation
 
+- Screenshots of the single sign-on login and the OAuth assignments screens (README, `docs/oauth.md`, Docker Hub)
 - Configuration reference in the README and on Docker Hub now lists every variable (incl. all `OAUTH_*`, TLS, pool/limit settings) with default and description, and marks per-token overrides.
 
 ## [1.0.0] - 2026-11-07

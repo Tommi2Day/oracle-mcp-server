@@ -43,6 +43,22 @@ Group names and e-mails are compared case-insensitively. Entra puts group **obje
 
 ## Assignments
 
+In the admin UI (sign in with single sign-on as an admin) the assignments are managed in the section *OAuth assignments*:
+
+<table>
+  <tr>
+    <td width="35%" valign="top"><b>Login with single sign-on</b> next to the token login<br><img src="images/admin-sso-login.png" alt="Admin UI: login with single sign-on button"></td>
+    <td width="65%" valign="top"><b>OAuth assignments</b> — groups and users mapped to a default connection; <i>environment</i> entries come from <code>OAUTH_*</code> and are read-only<br><img src="images/admin-assignments.png" alt="Admin UI: OAuth assignments"></td>
+  </tr>
+</table>
+
+<details>
+<summary>Edit assignment: user, admin role, client-supplied connection and default connection</summary>
+
+<img src="images/admin-assignment-edit.png" width="420" alt="Admin UI: edit assignment">
+
+</details>
+
 An assignment is `{ "group" | "user", "connection", "client_connection", "admin" }`:
 
 ```json
