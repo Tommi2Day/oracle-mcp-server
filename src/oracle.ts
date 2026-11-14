@@ -511,7 +511,9 @@ export function describeConnection(c: OraConnection, mode: DriverMode = "thin"):
 
 /** Removes a wallet password that may appear in Easy Connect Plus parameters. */
 export function redactConnectString(s: string): string {
-  return s.replace(/(wallet_password\s*=\s*)[^&)\s]+/gi, "$1***");
+  return s
+    .replace(/(wallet_password\s*=\s*)[^&)\s]+/gi, "$1***")
+    .replace(/^(\s*)[^\s/@:?=]+\/[^@\s]*@/, "$1***/***@"); // SQL*Plus style user/password@target
 }
 
 /**

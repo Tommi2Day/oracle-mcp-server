@@ -238,6 +238,19 @@ export function send403(res: ServerResponse, message = "Forbidden"): void {
   res.end(JSON.stringify({ error: message }));
 }
 
+/** A malformed request body (answered with 400; the parser's message is never logged, it quotes the body). */
+export class BadRequestError extends Error {}
+
+/** Parsed JSON body ({} when empty). V8's JSON errors quote a snippet of the input, which may be a password. */
+export async function readJsonBody(req: IncomingMessage): Promise<any> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  try {
+    return JSON.parse((await readBody(req)) || "{}");
+  } catch (e) {
+    if (e instanceof SyntaxError) throw new BadRequestError("Invalid JSON body");
+    throw e;
+  }
+}
+
 export function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -551,6 +564,7 @@ export async function handleAdminRequest(req: IncomingMessage, res: ServerRespon
     if (!handler) { sendJson(res, 405, { error: "Method Not Allowed" }); return; }
     await handler(req, res, id as number, hooks, admin);
   } catch (err) {
+    if (err instanceof BadRequestError) { sendJson(res, 400, { error: err.message }); return; }
     const msg = (err as Error).message;
     log("error", "ADMIN", `token="${tokenName}" action="${req.method} ${pathname}" ip="${ip}" error=${JSON.stringify(msg)}`);
     if ((err as Error).stack) log("debug", "ADMIN", (err as Error).stack as string);
@@ -593,7 +607,7 @@ function createError(body: { name?: unknown; connection?: unknown; client_connec
 
 // POST /admin/tokens – create new token
 async function createToken(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const body = JSON.parse((await readBody(req)) || "{}");
+  const body = await readJsonBody(req);
   const err = createError(body);
   if (err) { sendJson(res, 400, { error: err }); return; }
   const clientMode = parseClientConnectionMode(body.client_connection) as ClientConnectionMode;
@@ -642,7 +656,7 @@ function applyTokenUpdates(entry: TokenRecord, updates: Record<string, unknown>)
 
 // PATCH /admin/tokens/:id – update name, active and/or connection
 async function updateToken(req: IncomingMessage, res: ServerResponse, id: number, { onUpdate }: AdminHooks): Promise<void> {
-  const updates = JSON.parse((await readBody(req)) || "{}");
+  const updates = await readJsonBody(req);
   const err = updateError(updates);
   if (err) { sendJson(res, 400, { error: err }); return; }
   const store = loadTokenStore();
@@ -696,7 +710,7 @@ function assignmentBodyError(body: Record<string, unknown>, partial: boolean): s
 
 // POST /admin/assignments – { group | user, connection, client_connection, admin, note }
 async function createAssignment(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const body = JSON.parse((await readBody(req)) || "{}");
+  const body = await readJsonBody(req);
   const error = assignmentBodyError(body, false);
   if (error) { sendJson(res, 400, { error }); return; }
   const store = loadTokenStore();
@@ -715,7 +729,7 @@ async function createAssignment(req: IncomingMessage, res: ServerResponse): Prom
 
 // PATCH /admin/assignments/:id – change connection, client_connection, admin, note (not group/user: delete and re-create)
 async function updateAssignment(req: IncomingMessage, res: ServerResponse, id: number, { onUpdate }: AdminHooks): Promise<void> {
-  const updates = JSON.parse((await readBody(req)) || "{}");
+  const updates = await readJsonBody(req);
   if (updates.group !== undefined || updates.user !== undefined) {
     sendJson(res, 400, { error: '"group" and "user" cannot be changed' });
     return;

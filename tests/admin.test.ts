@@ -85,6 +85,18 @@ describe("handleAdminRequest", () => {
     expect(resBody(res).error).toMatch(/Unknown connection field/);
   });
 
+  it("answers a malformed body with 400 and never logs a snippet of it (may contain a password)", async () => {
+    const logged = vi.spyOn(console, "error");
+    for (const [url, body] of [["/admin/tokens", "password=S3cretPw&user=x"], ["/admin/assignments", '{"connection": {"password": S3cretPw}}']]) {
+      const res = makeRes();
+      await handleAdminRequest(makeReq("POST", url, { body }), res);
+      expect(res.writeHead, url).toHaveBeenCalledWith(400, expect.any(Object));
+      expect(resBody(res).error).toBe("Invalid JSON body");
+    }
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("S3cret");
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("assword");
+  });
+
   it("PATCH keeps the stored password when none is sent and calls onUpdate", async () => {
     seedStore([makeToken({ connection: { host: "old", user: "u", password: "pw" } })]);
     const onUpdate = vi.fn();
@@ -154,9 +166,9 @@ describe("handleAdminRequest", () => {
     expect(res.writeHead).toHaveBeenCalledWith(404, expect.any(Object));
   });
 
-  it("returns 500 on invalid JSON", async () => {
+  it("returns 400 on invalid JSON", async () => {
     const res = makeRes();
     await handleAdminRequest(makeReq("POST", "/admin/tokens", { body: "{nope" }), res);
-    expect(res.writeHead).toHaveBeenCalledWith(500, expect.any(Object));
+    expect(res.writeHead).toHaveBeenCalledWith(400, expect.any(Object));
   });
 });

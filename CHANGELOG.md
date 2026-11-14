@@ -63,6 +63,7 @@ bearer tokens, and the skills and OAuth path are now tested against real contain
 
 ### Security
 
+- A malformed admin request body is answered with `400 Invalid JSON body` (was `500`); the JSON parser message quotes a snippet of the body, which could contain a password, and is no longer logged. Connect strings of the form `user/password@target` are masked in `/info` and log lines
 - With OAuth configured, an empty `AUTH_TOKEN` does not disable authentication
 - E-mail matching ignores an e-mail the provider marks `email_verified: false`; `OAUTH_REQUIRE_VERIFIED_EMAIL`
   demands `true`

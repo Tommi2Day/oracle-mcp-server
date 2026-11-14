@@ -217,6 +217,9 @@ describe("describeConnection", () => {
   });
   it("redacts wallet passwords", () => {
     expect(redactConnectString("tcps://h/s?wallet_password=abc&x=1")).toBe("tcps://h/s?wallet_password=***&x=1");
+    expect(redactConnectString("scott/tiger@dbhost:1521/SVC")).toBe("***/***@dbhost:1521/SVC");
+    expect(redactConnectString("dbhost:1521/SVC?x=a@b")).toBe("dbhost:1521/SVC?x=a@b");
+    expect(redactConnectString("//h:1521/S")).toBe("//h:1521/S");
   });
 });
 
