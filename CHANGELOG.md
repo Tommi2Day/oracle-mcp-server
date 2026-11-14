@@ -5,13 +5,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- `example.mcp.json`: inactive examples (`_inactive_examples`) for OAuth login by the client, an OAuth access token header
-  and client-supplied connections (`X-Oracle-*` headers: own credentials, own database)
-- Docs: README "When to choose this server" (and the DOCKERHUB.md intro) now cover single sign-on, directory-group based
-  access, attribution of the individual user in `V$SESSION` / audit log, the skills and the real-container tests
-
 ## [1.1.0] - 2026-11-14
 
 Single sign-on: users can authenticate with an OpenID Connect provider (Microsoft Entra ID, Keycloak, …) instead of
@@ -61,6 +54,10 @@ bearer tokens, and the skills and OAuth path are now tested against real contain
 
 ### Changed
 
+- `example.mcp.json`: inactive examples (`_inactive_examples`) for OAuth login by the client, an OAuth access token header
+  and client-supplied connections (`X-Oracle-*` headers: own credentials, own database)
+- Docs: README "When to choose this server" (and the DOCKERHUB.md intro) now cover single sign-on, directory-group based
+  access, attribution of the individual user in `V$SESSION` / audit log, the skills and the real-container tests
 - `/info` accepts the same admin authentication as `/admin/*` (also OAuth admins)
 
 ### Security
