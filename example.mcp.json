@@ -7,10 +7,6 @@
         "Authorization": "Bearer xxxxxx"
       }
     },
-    "oracle-oauth": {
-      "type": "http",
-      "url": "https://oracle-mcp-server.local:3000/mcp"
-    },
     "oracle-local-stdio": {
       "command": "node",
       "args": ["/path/to/oracle-mcp-server/dist/index.js"],
@@ -18,6 +14,50 @@
         "ORA_CONNECT_STRING": "jdbc:oracle:thin:@//localhost:1521/FREEPDB1",
         "ORA_USER": "mcp",
         "ORA_PASSWORD": "mcp_pw"
+      }
+    }
+  },
+
+  "_inactive_examples": {
+    "_comment": "Not used by any client: unknown top-level keys are ignored. Copy an entry into mcpServers to activate it (README: Claude configuration, docs/oauth.md: MCP clients).",
+
+    "oracle-oauth": {
+      "_comment": "OAuth 2.0 / OIDC (OAUTH_ISSUER + OAUTH_PUBLIC_URL on the server): the client finds the identity provider through /.well-known/oauth-protected-resource and logs the user in itself. Only the URL is configured. With a pre-registered public client the id is passed on the command line: claude mcp add --transport http --client-id <client-id> oracle <url>",
+      "type": "http",
+      "url": "https://oracle-mcp-server.local:3000/mcp"
+    },
+
+    "oracle-oauth-static-token": {
+      "_comment": "OAuth access token as static header (scripts, tests). It expires (minutes to an hour), so this is not for daily use by people.",
+      "type": "http",
+      "url": "https://oracle-mcp-server.local:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer <access token of the identity provider>"
+      }
+    },
+
+    "oracle-own-credentials": {
+      "_comment": "Client-supplied connection, mode 'credentials' (token field client_connection, assignment client_connection or ORA_CLIENT_CONNECTION): the bearer token authorizes the client, X-Oracle-User / X-Oracle-Password log in with the person's own database account on the target of the token. Use HTTPS; the headers are sent on the initialize request and apply to the whole session.",
+      "type": "http",
+      "url": "https://oracle-mcp-server.local:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer xxxxxx",
+        "X-Oracle-User": "scott",
+        "X-Oracle-Password": "tiger"
+      }
+    },
+
+    "oracle-own-database": {
+      "_comment": "Client-supplied connection, mode 'full': the client also chooses the target (X-Oracle-Host/-Port/-Service-Name, or -Tns-Alias, or -Connect-String) and must supply user and password. Wallet and TNS_ADMIN paths of the server cannot be set by clients.",
+      "type": "http",
+      "url": "https://oracle-mcp-server.local:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer xxxxxx",
+        "X-Oracle-Host": "db.example.com",
+        "X-Oracle-Port": "1521",
+        "X-Oracle-Service-Name": "ORCLPDB1",
+        "X-Oracle-User": "scott",
+        "X-Oracle-Password": "tiger"
       }
     }
   }

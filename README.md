@@ -16,7 +16,8 @@ other MCP clients) access to **Oracle Database** — the Oracle sibling of
   DML/DDL/PL/SQL with `DBMS_OUTPUT`, and performance analysis (execution plans, top SQL, sessions, locks, optimizer
   statistics, alert log and trace files; ASH/AWR and SQL Monitor only when the packs are licensed) — [details](#tools)
 - **Claude skills:** six ready-made workflows — database status, top sessions and SQL, problem detection, SQL
-  tuning, documentation and error analysis incl. alert and trace logs — [details](#claude-skills)
+  tuning, documentation and error analysis incl. alert and trace logs — [details](#claude-skills); their steps are
+  tested against a real database (blocking chain, slow statement, deadlock → alert log → trace file)
 - **Safe reads:** `query` runs in `SET TRANSACTION READ ONLY` and is always rolled back, so Oracle itself rejects
   writes; only `SELECT`/`WITH` are accepted (DDL would commit implicitly); results capped at 200 rows
   (`ORA_MAX_ROWS`) to keep the LLM context small
@@ -31,7 +32,7 @@ other MCP clients) access to **Oracle Database** — the Oracle sibling of
   an access token, the admin UI offers SSO, and **groups or e-mails choose the default database connection**
   (deny by default) — [details](#oauth-20--openid-connect)
 - **Traceable in the database:** each session carries `MODULE`, `ACTION` = tool and `CLIENT_IDENTIFIER` = token
-  name ([Session identification](#session-identification)); plus a structured audit log of tool calls, sessions,
+  name or, with SSO, the user's e-mail ([Session identification](#session-identification)); plus a structured audit log of tool calls, sessions,
   rejected logins and admin actions ([example](#logging))
 - **Transport & operations:** stdio or Streamable HTTP/HTTPS (optional mTLS), Docker image, docker compose with an
   Oracle Free test database, Helm chart (existing Secrets, `TNS_ADMIN` from Secrets/ConfigMaps, ingress, HPA,
@@ -40,16 +41,30 @@ other MCP clients) access to **Oracle Database** — the Oracle sibling of
 ### When to choose this server
 
 Choose it when **several people or AI clients share Oracle access through one central service** — with
-revocable tokens instead of database passwords in every client config, per-token database users, TCPS wallets
-kept on the server, and an audit trail in both the log and `V$SESSION`.
+revocable tokens or your company's single sign-on (Entra ID, Keycloak, …) instead of database passwords in every client
+config, group-based access to different databases, TCPS wallets kept on the server, and an audit trail that names
+the person in both the log and `V$SESSION`.
+
+- **No credentials on laptops.** Clients get a token or log in with their corporate account; database users,
+  passwords, wallets and `tnsnames.ora` stay on the server.
+- **Access follows your directory.** With OAuth/OIDC an assignment maps an Entra/Keycloak group or e-mail to a
+  database connection (read-only reporting user for most, a DBA account for a few), deny by default; joiners and leavers are
+  handled in the identity provider.
+- **Attributable.** The shared database account is not what DBAs see: `CLIENT_IDENTIFIER` carries the user's e-mail
+  (or the token name), `ACTION` the tool, next to `[AUDIT]` log lines for logins, sessions and admin changes.
+- **Diagnostics included.** Skills and tools for "what is my database doing", locks, top SQL, plans, alert log and
+  trace files — read-only, licence-aware (ASH/AWR/SQL Monitor only when licensed).
+- **Verified against real components.** Besides unit tests, CI runs every tool, the skills' workflows and the OAuth
+  path against an Oracle Free container and a real identity provider (Keycloak, login form included).
 
 | | Local Oracle MCP servers (e.g. SQLcl `sql -mcp`) | oracle-mcp-server |
 |---|---|---|
 | Deployment | Process per user on the workstation (stdio) | Central service (Docker / Kubernetes) plus stdio |
 | Client authentication | Whoever can start it | Bearer tokens, revocable at runtime, or OAuth 2.0 / OIDC single sign-on |
+| Who may use which database | The user's own saved connections | Per token, or per directory group / e-mail (OAuth assignments), deny by default |
 | Credentials & wallets | On every client machine | Stay on the server; clients only get a token |
 | Databases per instance | Saved connections of that user | One connection per token, managed centrally |
-| Audit | Log table `DBTOOLS$MCP_LOG` and `V$SESSION` | Server log (token, tool, client IP, rejected logins) and `CLIENT_IDENTIFIER` / `ACTION` in `V$SESSION` |
+| Audit | Log table `DBTOOLS$MCP_LOG` and `V$SESSION` | Server log (token or user e-mail, tool, client IP, rejected logins, `[AUDIT]` trail) and `CLIENT_IDENTIFIER` / `ACTION` in `V$SESSION` |
 
 **When to choose something else:** for a single developer working locally with SQLcl anyway, Oracle's
 [SQLcl MCP Server](https://docs.oracle.com/en/database/oracle/sql-developer-command-line/25.2/sqcug/using-oracle-sqlcl-mcp-server.html)
@@ -57,7 +72,9 @@ needs no extra service. On Autonomous AI Database, the built-in
 [Autonomous AI Database MCP Server](https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/about-mcp-server.html)
 exposes Select AI Agent tools with OAuth. For several database engines behind one server, look at
 [DBHub](https://github.com/bytebase/dbhub). oracle-mcp-server focuses on secure, audited, multi-user SQL access to
-any Oracle Database (on-premises, cloud, container) — self-hosted, with no Oracle client install needed.
+any Oracle Database (on-premises, cloud, container) — self-hosted, with no Oracle client install needed. It brings
+its own authorization (tokens or your identity provider) and does not replace database privileges: whatever the
+connection of a token or assignment may do, the client may do — give reporting groups a read-only database user.
 
 ---
 
@@ -735,7 +752,9 @@ claude mcp add --transport http --client-id <client-id> oracle https://oracle-mc
 A static `Authorization: Bearer <access token>` header works as well, but access tokens expire. Provider
 requirements (client registration, audience, scopes) and `OAUTH_RESOURCE_SCOPES`: [docs/oauth.md](docs/oauth.md#mcp-clients).
 
-Local (stdio): see `example.mcp.json`.
+Local (stdio): see `example.mcp.json`. The file also has inactive examples (block `_inactive_examples`, ignored by
+clients; copy an entry into `mcpServers` to use it): OAuth login by the client, an OAuth access token as header, and
+[client-supplied connections](#client-supplied-connections) with the user's own credentials or a client-chosen database.
 
 ---
 
