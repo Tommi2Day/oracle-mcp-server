@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Documentation
+
+- Configuration reference in the README and on Docker Hub now lists every variable (incl. all `OAUTH_*`, TLS, pool/limit settings) with default and description, and marks per-token overrides.
+
 ## [1.1.0] - 2026-11-14
 
 Single sign-on: users can authenticate with an OpenID Connect provider (Microsoft Entra ID, Keycloak, …) instead of
