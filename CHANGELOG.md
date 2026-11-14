@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-14
+
+Single sign-on: users can authenticate with an OpenID Connect provider (Microsoft Entra ID, Keycloak, …) instead of
+bearer tokens, and the skills and OAuth path are now tested against real containers. Backwards compatible: without
+`OAUTH_ISSUER` nothing changes.
+
 ### Added
 
 - **OAuth 2.0 / OpenID Connect** as an alternative to bearer tokens, primarily for Microsoft Entra ID (any OIDC provider
