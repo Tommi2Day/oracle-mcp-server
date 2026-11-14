@@ -5,10 +5,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Documentation
-
-- Configuration reference in the README and on Docker Hub now lists every variable (incl. all `OAUTH_*`, TLS, pool/limit settings) with default and description, and marks per-token overrides.
-
 ## [1.1.0] - 2026-11-14
 
 Single sign-on: users can authenticate with an OpenID Connect provider (Microsoft Entra ID, Keycloak, …) instead of
@@ -69,6 +65,10 @@ bearer tokens, and the skills and OAuth path are now tested against real contain
 - With OAuth configured, an empty `AUTH_TOKEN` does not disable authentication
 - E-mail matching ignores an e-mail the provider marks `email_verified: false`; `OAUTH_REQUIRE_VERIFIED_EMAIL`
   demands `true`
+
+### Documentation
+
+- Configuration reference in the README and on Docker Hub now lists every variable (incl. all `OAUTH_*`, TLS, pool/limit settings) with default and description, and marks per-token overrides.
 
 ## [1.0.0] - 2026-11-07
 
