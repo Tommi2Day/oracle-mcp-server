@@ -432,7 +432,7 @@ WHERE  module = 'Prod DB (EU)' GROUP BY client_id;
 ## Tokens & per-token connections
 
 Tokens are managed in the admin UI (`/admin`), via the REST API (`/admin/tokens`, see `openapi.json`)
-or with `scripts/admincli.sh`. The plaintext token is shown once; only its SHA-256 hash is stored.
+or with `scripts/admincli.sh` (`./scripts/admincli.sh help`; also manages [OAuth assignments](#assignments-from-the-command-line)). The plaintext token is shown once; only its SHA-256 hash is stored.
 
 ```bash
 export AUTH_TOKEN=<admin token> MCP_URL=http://localhost:3000
@@ -665,7 +665,7 @@ OAUTH_ADMIN_GROUPS=<admin-group-object-id>  OAUTH_ALLOWED_GROUPS=<user-group-obj
 MCP clients can send such a token as a header or log in by themselves ([client setup](docs/oauth.md#mcp-clients)).
 Full reference, Entra setup steps and security notes: [docs/oauth.md](docs/oauth.md).
 
-Users and groups are assigned to connections in the admin UI (*OAuth assignments*):
+Users and groups are assigned to connections in the admin UI (*OAuth assignments*) or with `scripts/admincli.sh` ([below](#assignments-from-the-command-line)):
 
 <table>
   <tr>
@@ -680,6 +680,23 @@ Users and groups are assigned to connections in the admin UI (*OAuth assignments
 <img src="docs/images/admin-assignment-edit.png" width="420" alt="Admin UI: edit assignment">
 
 </details>
+
+#### Assignments from the command line
+
+```bash
+export AUTH_TOKEN=<admin token or access token of an OAuth admin> MCP_URL=http://localhost:3000
+./scripts/admincli.sh whoami                       # who am I, is OAuth configured
+./scripts/admincli.sh add-assignment --group grp-dba --tns-alias PROD_HIGH --user mcp_dba --password secret
+./scripts/admincli.sh add-assignment --email alice@example.com --client-connection credentials
+./scripts/admincli.sh add-assignment --email '*@example.com'      # access with the default connection
+./scripts/admincli.sh add-assignment --group grp-admin --admin    # may use the admin UI and API
+./scripts/admincli.sh list-assignments
+./scripts/admincli.sh set-assignment-conn 2 '{"host":"db2","service_name":"PDB1","user":"ro","password":"…"}'
+./scripts/admincli.sh delete-assignment 2
+```
+
+`admincli.sh` takes the same connection options as `add-token`; `--group` / `--email` (e-mail, object id or `*@domain`) name
+who the assignment is for. Assignments from the environment (`OAUTH_*`) are listed as read-only. `help` shows all commands.
 
 ---
 

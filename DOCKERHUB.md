@@ -97,6 +97,8 @@ With `OAUTH_ISSUER` set, the admin UI offers single sign-on and assigns groups a
 
 </details>
 
+Scripting: `scripts/admincli.sh` of the [repository](https://github.com/Tommi2Day/oracle-mcp-server/blob/main/scripts/admincli.sh) manages tokens and assignments (`add-assignment --group grp-dba --tns-alias PROD_HIGH …`, `list-assignments`, `whoami`) against the REST API.
+
 ## Audit logging
 
 All activity is written to stderr (`docker logs oracle-mcp-server`): tool calls, session start/stop, rejected logins

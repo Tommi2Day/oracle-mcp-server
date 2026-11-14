@@ -13,6 +13,7 @@ bearer tokens, and the skills and OAuth path are now tested against real contain
 
 ### Added
 
+- `scripts/admincli.sh`: **OAuth assignment commands** (`list-assignments`, `show-assignment`, `add-assignment --group|--email …` with the connection options of `add-token`, `delete-assignment`, `set-assignment-conn`, `clear-assignment-conn`, `set-assignment-client-conn`, `set-assignment-admin`) and `whoami`; `ADMIN_TOKEN` is accepted as alias of `AUTH_TOKEN`, and the access token of an OAuth admin works as well. Covered by `tests/admincli.test.ts`
 - **OAuth 2.0 / OpenID Connect** as an alternative to bearer tokens, primarily for Microsoft Entra ID (any OIDC provider
   works): `OAUTH_ISSUER` switches it on. MCP clients send an access token (JWT: signature via JWKS, issuer, audience,
   lifetime are validated locally); the admin UI offers single sign-on (authorization code flow with PKCE, `HttpOnly`

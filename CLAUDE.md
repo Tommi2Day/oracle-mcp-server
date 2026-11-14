@@ -16,7 +16,7 @@ npm run typecheck        # tsc --noEmit incl. tests
 ./scripts/test.sh        # tests in Docker (no local Node.js)
 docker compose up -d     # Oracle Free test DB + server (examples/tns_admin mounted as TNS_ADMIN)
 docker build --build-arg ORACLE_THICK=true -t oracle-mcp-server:thick .   # Instant Client variant
-./scripts/admincli.sh …  # token management (add-token supports --tns-alias/--connect-string/--host …)
+./scripts/admincli.sh …  # tokens and OAuth assignments (add-token / add-assignment: --tns-alias/--connect-string/--host …)
 ```
 
 ## Architecture
@@ -108,6 +108,7 @@ SQL text only at `LOG_LEVEL=debug`.
 - `tests/oracle.test.ts` — connect string parsing, merging, pool attributes, wallets
 - `tests/lib.test.ts`, `tests/admin.test.ts` — auth, store encryption, admin API (mock `node:fs`)
 - `tests/index.test.ts` — tools/routing with mocked `oracledb`, MCP SDK and `lib.js`
+- `tests/admincli.test.ts` — `scripts/admincli.sh` against a stub admin API (needs bash + curl)
 - `tests/oauth.test.ts`, `tests/oauth-auth.test.ts` — OAuth with a fake provider (`tests/oidc-helpers.ts`: RSA/EC keys,
   stubbed `fetch`)
 - Integration tests (Docker, skipped unless the variable is set; `npm run test:integration`):

@@ -95,6 +95,23 @@ TLS fields, `diagnostics_pack`, `tuning_pack`).
   Changes apply immediately, also to open sessions of the admin UI. Open MCP sessions keep their pool; the next
   session uses the new connection.
 
+From the command line (scripts/provisioning; `AUTH_TOKEN` or the access token of an admin):
+
+```bash
+export AUTH_TOKEN=<admin token or access token of an OAuth admin> MCP_URL=http://localhost:3000
+./scripts/admincli.sh whoami                       # who am I, is OAuth configured
+./scripts/admincli.sh add-assignment --group grp-dba --tns-alias PROD_HIGH --user mcp_dba --password secret
+./scripts/admincli.sh add-assignment --email alice@example.com --client-connection credentials
+./scripts/admincli.sh add-assignment --email '*@example.com'      # access with the default connection
+./scripts/admincli.sh add-assignment --group grp-admin --admin    # may use the admin UI and API
+./scripts/admincli.sh list-assignments
+./scripts/admincli.sh set-assignment-conn 2 '{"host":"db2","service_name":"PDB1","user":"ro","password":"…"}'
+./scripts/admincli.sh delete-assignment 2
+```
+
+`admincli.sh` takes the same connection options as `add-token`; `--group` / `--email` (e-mail, object id or `*@domain`) name
+who the assignment is for. Assignments from the environment (`OAUTH_*`) are listed as read-only. `help` shows all commands.
+
 ## MCP clients
 
 Nothing OAuth-specific is needed in the client configuration unless you want the client to log in by itself. There
