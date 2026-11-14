@@ -1,0 +1,16 @@
+{
+  "interactiveLogin": false,
+  "tokenCallbacks": [
+    {
+      "issuerId": "default",
+      "tokenExpiry": 300,
+      "requestMappings": [
+        { "requestParam": "scope", "match": "alice", "claims": { "sub": "oid-alice", "email": "alice@example.com", "name": "Alice DBA", "groups": ["grp-dba"], "aud": ["api://oracle-mcp"] } },
+        { "requestParam": "scope", "match": "bob", "claims": { "sub": "oid-bob", "email": "bob@example.com", "groups": ["grp-users"], "aud": ["api://oracle-mcp"] } },
+        { "requestParam": "scope", "match": "eve", "claims": { "sub": "oid-eve", "email": "eve@example.com", "groups": ["grp-other"], "aud": ["api://oracle-mcp"] } },
+        { "requestParam": "scope", "match": "root", "claims": { "sub": "oid-root", "email": "root@example.com", "groups": ["grp-admin"], "aud": ["api://oracle-mcp"] } },
+        { "requestParam": "grant_type", "match": "authorization_code", "claims": { "sub": "oid-root", "email": "root@example.com", "groups": ["grp-admin"] } }
+      ]
+    }
+  ]
+}

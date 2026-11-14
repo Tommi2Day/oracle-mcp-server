@@ -243,3 +243,20 @@ privilege a skill reports what it could not check instead of guessing.
 `skills/*/SKILL.md` reference tool names and parameters of `src/perf.ts`. When a tool changes, update the skill and
 this page in the same commit. The skill text is guidance for the model, not code — keep it short, concrete and
 free of environment-specific names.
+
+### Tests
+
+- `tests/skills.test.ts` (runs with `npm test`, no database): frontmatter, entry in this page, and the contract with
+  the tools — every `` `param: value` `` snippet in a `SKILL.md` must be a real parameter (and, for enums, a valid
+  value) of a tool, and every tool must be mentioned by a skill. A renamed parameter breaks this test, not the skill
+  in production.
+- `tests/skills.integration.test.ts` (`ORA_TEST_HOST`, see [README](../README.md#development)): the workflows on a
+  real database — the SQL blocks run through `query`; `locks` / `session_activity` / `db_overview` find a real
+  blocking chain (idle root blocker, waiter) and the proposed `KILL SESSION` is not executed; `top_sql`, `sql_plan`
+  (also `ALLSTATS LAST`), `explain_plan` and `table_stats` on a slow statement, whose plan changes after the
+  recommended index; the schema documentation flow; and a real deadlock followed through `alert_log` → `trace_files`
+  → `trace_content` (`Deadlock graph` with `context`). It also checks that missing log privileges produce the hint
+  the error-analysis skill relies on.
+
+  These tests cannot check what the *model* does with a skill (whether it follows the steps and interprets results
+  well); they guarantee that every step a skill prescribes works and returns the evidence the skill tells it to use.

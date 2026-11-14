@@ -10,6 +10,7 @@ admin UI/API, logging and deployment model, but TypeScript and node-oracledb.
 ```bash
 npm run build            # tsc -p tsconfig.build.json → dist/
 npm test                 # vitest (unit tests, mocked driver — no database needed)
+npm run test:integration # Docker integration tests (Oracle Free + OIDC provider, see Tests)
 npm run lint             # eslint (typescript-eslint)
 npm run typecheck        # tsc --noEmit incl. tests
 ./scripts/test.sh        # tests in Docker (no local Node.js)
@@ -26,6 +27,13 @@ docker build --build-arg ORACLE_THICK=true -t oracle-mcp-server:thick .   # Inst
   certificate-only → trusted CA), `describeConnection` (password-free, for /info), `normalizeSql`.
 - **`src/lib.ts`** — logging, auth, token store (AES-256-GCM for `password` and `wallet_password`), admin API,
   `validateConnection`, `toSafeToken` (secrets never returned; `password_set` flags).
+- **`src/oauth.ts`** / **`src/oauth-routes.ts`** — OAuth 2.0 / OIDC (port of pg-mcp-server): `getOAuthConfig` (`OAUTH_*`, incl. `OAUTH_RESOURCE_SCOPES` for the protected-resource metadata),
+  `verifyJwt` (JWKS, RS/PS/ES only), `identityFromClaims`, `resolveAccess` (assignments: user > `*@domain` > group,
+  deny by default), PKCE browser login + server-side sessions, `/auth/*` and protected-resource metadata. `oauth.ts`
+  is pure (no lib imports); `lib.ts` wires it into `checkAuth` (bearer JWT → identity → assignment → connection, the
+  e-mail becomes the token name and so `CLIENT_IDENTIFIER`), `authenticateAdmin` (AUTH_TOKEN, admin JWT or session
+  cookie with CSRF header) and `/admin/assignments|me`. Assignments live in the token store (`assignments`,
+  `next_assignment_id`; secrets encrypted like token secrets). Docs: `docs/oauth.md`.
 - **`src/index.ts`** — MCP tools, pool cache, HTTP routing, startup. `isMain` guard keeps imports side-effect free.
 - **`src/perf.ts`** — performance tools (`PERF_TOOLS` with a `feature` each: `perf`, `diagnostics`, `tuning`).
   The unlicensed group includes `db_overview`, `locks` and the log tools (`alert_log`, `incidents`, `trace_files`,
@@ -100,6 +108,14 @@ SQL text only at `LOG_LEVEL=debug`.
 - `tests/oracle.test.ts` — connect string parsing, merging, pool attributes, wallets
 - `tests/lib.test.ts`, `tests/admin.test.ts` — auth, store encryption, admin API (mock `node:fs`)
 - `tests/index.test.ts` — tools/routing with mocked `oracledb`, MCP SDK and `lib.js`
+- `tests/oauth.test.ts`, `tests/oauth-auth.test.ts` — OAuth with a fake provider (`tests/oidc-helpers.ts`: RSA/EC keys,
+  stubbed `fetch`)
+- Integration tests (Docker, skipped unless the variable is set; `npm run test:integration`):
+  `tests/oracle.integration.test.ts` (`ORA_TEST_HOST`; `docker compose up -d oracle-test`; real tools + OAuth over HTTP,
+  checks `V$SESSION`), `tests/skills.integration.test.ts` (`ORA_TEST_HOST`; runs the skills' SQL blocks and workflows: blocking chain, slow statement, deadlock → alert log → trace), `tests/skills.test.ts` (no DB: skill ↔ tool schema contract), `tests/oidc.integration.test.ts` (`OIDC_TEST_ISSUER`; mock server: `docker compose --profile oidc up -d
+  oidc-test`, users in `tests/oidc/mock-oauth2-config.json`; Keycloak: `--profile keycloak`, realm
+  `tests/oidc/keycloak-realm.json`, issuer `http://localhost:8081/realms/oracle-mcp`, real login form). They create/drop the schemas `MCPT_SALES`, `MCPT_HR`,
+  `MCPT_SK` and the user `MCPT_READER`; the CI job `integration` runs them.
 
 ## Version sync
 

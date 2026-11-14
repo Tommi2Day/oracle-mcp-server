@@ -24,6 +24,7 @@
     "start:http": "TRANSPORT=http node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run tests/oracle.integration.test.ts tests/skills.integration.test.ts tests/oidc.integration.test.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "version": "node --input-type=commonjs -e \"const fs=require('fs'),v=process.env.npm_new_version;const a=JSON.parse(fs.readFileSync('openapi.json'));a.info.version=v;fs.writeFileSync('openapi.json',JSON.stringify(a,null,2)+'\\n');let c=fs.readFileSync('helm/oracle-mcp-server/Chart.yaml','utf8');c=c.replace(/^version: .+/m,'version: '+v).replace(/^appVersion: .+/m,'appVersion: \\\"'+v+'\\\"');fs.writeFileSync('helm/oracle-mcp-server/Chart.yaml',c);\" && git add openapi.json helm/oracle-mcp-server/Chart.yaml",

@@ -27,9 +27,12 @@ import { randomUUID, createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import {
   readFileEnv, getAuthToken,
-  checkAuth, checkAdminAuth, handleAdminRequest, migrateTokenStore, loadTokenStore,
+  checkAuth, authenticateAdmin, handleAdminRequest, migrateTokenStore, loadTokenStore, allAssignments, audit,
   log, isLogEnabled, getClientIp, getLogLevel, clientConnectionFromHeaders,
+  type AdminHooks, type SessionIdentity,
 } from "./lib.js";
+import { getOAuthConfig, oauthConfigProblems, browserLoginEnabled, type OAuthConfig } from "./oauth.js";
+import { handleOAuthRoute } from "./oauth-routes.js";
 import {
   connectionFromEnv, mergeConnection, resolvePoolAttributes, describeConnection,
   getDriverMode, normalizeSql, resolveConnectString, trustedCaFile, firstKeyword, toIdentifier, perfFeatures,
@@ -169,12 +172,19 @@ function releasePool(connection: OraConnection | null): void {
   let key: string;
   try { key = poolKey(connection); } catch { return; }
   if (key === safePoolKey(null) || clientPoolRefs.has(key)) return;
-  const stillUsed = loadTokenStore().tokens.some(t => t.active && t.connection && safePoolKey(t.connection) === key);
-  if (stillUsed) return;
+  if (connectionsInUse().some(c => safePoolKey(c) === key)) return;
   const p = poolCache.get(key);
   if (!p) return;
   poolCache.delete(key);
   p.then(pool => pool.close(5)).catch(() => {});
+}
+
+/** Connections of active tokens and OAuth assignments (stored and from the environment). */
+function connectionsInUse(): OraConnection[] {
+  const tokens = loadTokenStore().tokens.filter(t => t.active).map(t => t.connection);
+  let assigned: (OraConnection | null | undefined)[] = [];
+  try { assigned = allAssignments().map(a => a.connection); } catch { /* invalid OAUTH_ASSIGNMENTS is reported elsewhere */ }
+  return [...tokens, ...assigned].filter((c): c is OraConnection => !!c);
 }
 
 function safePoolKey(connection: OraConnection | null): string | null {
@@ -578,11 +588,12 @@ export async function handleRequest(req: http.IncomingMessage, res: http.ServerR
 }
 
 async function _handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if ((req.url?.startsWith("/auth/") || req.url?.startsWith("/.well-known/")) && await handleOAuthRoute(req, res)) return;
   if (req.method === "GET") {
     const serve = GET_ROUTES.get(req.url ?? "");
-    if (serve) { serve(req, res); return; }
+    if (serve) { await serve(req, res); return; }
   }
-  if (req.url?.startsWith("/admin/tokens")) {
+  if (/^\/admin\/(tokens|assignments|me)(\/|$)/.test(req.url ?? "")) {
     await handleAdminRequest(req, res, ADMIN_HOOKS);
     return;
   }
@@ -610,8 +621,8 @@ function serveHealth(_req: http.IncomingMessage, res: http.ServerResponse): void
   res.end(JSON.stringify({ status: "ok", tls: tlsEnabled }));
 }
 
-function serveInfo(req: http.IncomingMessage, res: http.ServerResponse): void {
-  if (!checkAdminAuth(req, res)) return;
+async function serveInfo(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!(await authenticateAdmin(req, res)).ok) return;
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
     name: mcpServerName,
@@ -621,19 +632,19 @@ function serveInfo(req: http.IncomingMessage, res: http.ServerResponse): void {
   }));
 }
 
-const GET_ROUTES = new Map<string, (req: http.IncomingMessage, res: http.ServerResponse) => void>([
+const GET_ROUTES = new Map<string, (req: http.IncomingMessage, res: http.ServerResponse) => void | Promise<void>>([
   ["/admin", serveAdminHtml],
   ["/admin/", serveAdminHtml],
   ["/health", serveHealth],
   ["/info", serveInfo],
 ]);
 
-/** Pools of deleted/changed/deactivated tokens are closed (if no other token uses them). */
-const ADMIN_HOOKS = {
-  onDelete: (token: { connection: OraConnection | null }) => releasePool(token.connection),
-  onUpdate: (before: { connection: OraConnection | null }, after: { connection: OraConnection | null; active: boolean }) => {
-    if (JSON.stringify(before.connection) !== JSON.stringify(after.connection) || !after.active) {
-      releasePool(before.connection);
+/** Pools of deleted/changed/deactivated tokens and assignments are closed (if nothing else uses them). */
+const ADMIN_HOOKS: AdminHooks = {
+  onDelete: (entry) => releasePool(entry.connection ?? null),
+  onUpdate: (before, after) => {
+    if (JSON.stringify(before.connection) !== JSON.stringify(after.connection) || after.active === false) {
+      releasePool(before.connection ?? null);
     }
   },
 };
@@ -696,7 +707,7 @@ async function startSession(req: http.IncomingMessage, res: http.ServerResponse,
   const { connection } = sc;
   const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
-    onsessioninitialized: (id) => trackSession(transport, id, auth.name, clientIp, sc),
+    onsessioninitialized: (id) => trackSession(transport, id, auth.name, clientIp, sc, auth.identity),
   });
   const server = createMcpServer(() => getPool(connection), auth.name, clientIp, featuresFor(connection));
   await server.connect(transport);
@@ -705,8 +716,12 @@ async function startSession(req: http.IncomingMessage, res: http.ServerResponse,
 
 /** Registers the session, logs start/stop and releases a client pool with the last session. */
 function trackSession(transport: StreamableHTTPServerTransport, id: string, tokenName: string, clientIp: string,
-  { connection, client, clientPoolKey }: SessionConnection): void {
+  { connection, client, clientPoolKey }: SessionConnection, identity?: SessionIdentity): void {
   sessions.set(id, transport);
+  if (identity) {
+    audit({ user: tokenName, sub: identity.sub, action: "session_start", session: id, via: "oauth", ip: clientIp,
+      assignment: identity.assignment, admin: identity.admin });
+  }
   if (client && clientPoolKey) {
     sessionClientConnections.set(id, client);
     retainClientPool(clientPoolKey);
@@ -803,12 +818,21 @@ function startupSummary(): { dbLine: string; perfLine: string } {
   return { dbLine, perfLine };
 }
 
+/** One-line description of the active authentication for the startup banner. */
+function describeAuth(oauth: OAuthConfig | null): string {
+  if (oauth) {
+    const login = browserLoginEnabled(oauth) ? ", browser login for the admin UI" : "";
+    return `🔑 OAuth 2.0 (issuer ${oauth.issuer})${getAuthToken() ? " + AUTH_TOKEN/file tokens" : ""}${login}`;
+  }
+  return getAuthToken() ? "🔑 Bearer token required (env + file tokens)" : "⚠️  disabled (AUTH_TOKEN not set)";
+}
+
 function startHttpServer(dbLine: string, perfLine: string): void {
   const TLS_ENABLED = (process.env.TLS_ENABLED || "false").toLowerCase() !== "false";
   const PORT        = parseInt(process.env.PORT || "3000", 10);
-  const authInfo = getAuthToken()
-    ? "🔑 Bearer token required (env + file tokens)"
-    : "⚠️  disabled (AUTH_TOKEN not set)";
+  const oauth = getOAuthConfig();
+  for (const p of oauthConfigProblems(oauth)) console.error(`⚠️  OAuth: ${p}`);
+  const authInfo = describeAuth(oauth);
   const banner = (scheme: string) => {
     console.error(`Oracle MCP Server (${scheme.toUpperCase()}) listening on port ${PORT}`);
     console.error(`  MCP endpoint : ${scheme}://localhost:${PORT}/mcp`);

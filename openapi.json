@@ -26,6 +26,18 @@
         "type": "http",
         "scheme": "bearer",
         "description": "A file token created via POST /admin/tokens. Grants access to /mcp only. Each file token can optionally route to a different Oracle database."
+      },
+      "OAuthAdmin": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "OAuth 2.0 access token (OAUTH_ISSUER set) of a user whose group/user assignment has admin=true. The admin UI uses a session cookie created by GET /auth/login instead."
+      },
+      "OAuthUser": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "OAuth 2.0 access token for /mcp. Access and default database connection come from the user's group/user assignments."
       }
     },
     "schemas": {
@@ -167,6 +179,51 @@
         ],
         "default": "none",
         "description": "What MCP clients of this token may set themselves via X-Oracle-* headers on the initialize request: none – nothing (token/server connection only); credentials – X-Oracle-User and X-Oracle-Password; full – additionally the target (X-Oracle-Connect-String, X-Oracle-Tns-Alias, X-Oracle-Host, X-Oracle-Port, X-Oracle-Service-Name, X-Oracle-Sid, X-Oracle-Protocol, X-Oracle-Ssl-Server-Dn-Match, X-Oracle-Ssl-Server-Cert-Dn). A client-supplied target always requires client credentials."
+      },
+      "Assignment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "integer (admin UI) or env-N (environment, read-only)"
+          },
+          "group": {
+            "type": "string",
+            "description": "Group id/name from the groups claim"
+          },
+          "user": {
+            "type": "string",
+            "description": "E-mail, or *@domain"
+          },
+          "connection": {
+            "$ref": "#/components/schemas/TokenConnection"
+          },
+          "client_connection": {
+            "type": "string",
+            "enum": [
+              "none",
+              "credentials",
+              "full"
+            ]
+          },
+          "admin": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "env",
+              "store"
+            ]
+          }
+        }
       }
     }
   },
@@ -209,7 +266,7 @@
     "/mcp": {
       "post": {
         "summary": "MCP Streamable-HTTP endpoint",
-        "description": "MCP protocol transport. Requires a Bearer token (admin or file token). When the token has a custom connection configured, that Oracle database is used for this session; otherwise the server default is used. Multi-step protocol: send `initialize` first, then `notifications/initialized`, then tool calls. Include the `mcp-session-id` header returned from `initialize` in subsequent requests. If the token's client_connection permits it, the client may send its own connection parameters as X-Oracle-* headers with the initialize request (see ClientConnectionMode); they apply to the whole session and are re-checked against the token on every request.",
+        "description": "MCP protocol transport. Requires a Bearer token (admin token, file token or, with OAUTH_ISSUER set, an OAuth 2.0 access token; the user's assignment then selects the default connection). When the token has a custom connection configured, that Oracle database is used for this session; otherwise the server default is used. Multi-step protocol: send `initialize` first, then `notifications/initialized`, then tool calls. Include the `mcp-session-id` header returned from `initialize` in subsequent requests. If the token's client_connection permits it, the client may send its own connection parameters as X-Oracle-* headers with the initialize request (see ClientConnectionMode); they apply to the whole session and are re-checked against the token on every request.",
         "operationId": "mcpRequest",
         "security": [
           {
@@ -217,6 +274,9 @@
           },
           {
             "FileToken": []
+          },
+          {
+            "OAuthUser": []
           }
         ],
         "parameters": [
@@ -417,6 +477,9 @@
         "security": [
           {
             "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
           }
         ],
         "responses": {
@@ -453,6 +516,9 @@
         "security": [
           {
             "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
           }
         ],
         "requestBody": {
@@ -555,6 +621,9 @@
         "security": [
           {
             "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
           }
         ],
         "requestBody": {
@@ -642,6 +711,9 @@
         "security": [
           {
             "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
           }
         ],
         "responses": {
@@ -689,6 +761,9 @@
         "security": [
           {
             "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
           }
         ],
         "responses": {
@@ -781,6 +856,248 @@
           },
           "401": {
             "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/admin/assignments": {
+      "get": {
+        "summary": "List OAuth assignments",
+        "description": "Environment assignments (OAUTH_*, read-only, passwords masked) followed by those stored via the admin UI.",
+        "operationId": "listAssignments",
+        "security": [
+          {
+            "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assignments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "assignments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Assignment"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Admin rights required"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create an OAuth assignment",
+        "description": "Exactly one of group or user. A matching assignment allows the user to use /mcp with the given default connection; admin=true also grants the admin UI/API. Changes apply immediately.",
+        "operationId": "createAssignment",
+        "security": [
+          {
+            "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Assignment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Admin rights required"
+          }
+        }
+      }
+    },
+    "/admin/assignments/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "patch": {
+        "summary": "Update an OAuth assignment",
+        "description": "connection, client_connection, admin. group/user cannot be changed.",
+        "operationId": "updateAssignment",
+        "security": [
+          {
+            "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Assignment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated"
+          },
+          "400": {
+            "description": "Invalid body"
+          },
+          "404": {
+            "description": "Not found (environment assignments cannot be changed)"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an OAuth assignment",
+        "operationId": "deleteAssignment",
+        "security": [
+          {
+            "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/admin/me": {
+      "get": {
+        "summary": "Current admin and OAuth setup",
+        "operationId": "adminMe",
+        "security": [
+          {
+            "AdminToken": []
+          },
+          {
+            "OAuthAdmin": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "name, method (token|oauth|none), email, oauth {issuer, groups_claim, audience, session_ttl}"
+          }
+        }
+      }
+    },
+    "/auth/status": {
+      "get": {
+        "summary": "OAuth status (public)",
+        "operationId": "authStatus",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "{enabled, login, authenticated, user, admin}"
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "get": {
+        "summary": "Start the browser login (authorization code + PKCE)",
+        "operationId": "authLogin",
+        "security": [],
+        "responses": {
+          "302": {
+            "description": "Redirect to the identity provider"
+          },
+          "404": {
+            "description": "Browser login not configured"
+          }
+        }
+      }
+    },
+    "/auth/callback": {
+      "get": {
+        "summary": "OAuth redirect URI",
+        "operationId": "authCallback",
+        "security": [],
+        "responses": {
+          "302": {
+            "description": "Session cookie set, redirect to /admin"
+          },
+          "401": {
+            "description": "Login failed"
+          },
+          "403": {
+            "description": "User has no assignment"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "summary": "End the browser session",
+        "operationId": "authLogout",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Session ended, cookie cleared"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-protected-resource": {
+      "get": {
+        "summary": "OAuth protected resource metadata (RFC 9728)",
+        "operationId": "protectedResource",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "resource, authorization_servers"
+          },
+          "404": {
+            "description": "OAuth not configured"
           }
         }
       }

@@ -1,0 +1,103 @@
+{
+  "realm": "oracle-mcp",
+  "displayName": "oracle-mcp-server test realm",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": 300,
+  "groups": [
+    { "name": "grp-dba" },
+    { "name": "grp-users" },
+    { "name": "grp-other" },
+    { "name": "grp-admin" }
+  ],
+  "users": [
+    {
+      "id": "oid-alice", "username": "alice", "email": "alice@example.com", "emailVerified": true,
+      "firstName": "Alice", "lastName": "DBA", "enabled": true,
+      "credentials": [{ "type": "password", "value": "alice", "temporary": false }],
+      "groups": ["/grp-dba"]
+    },
+    {
+      "id": "oid-bob", "username": "bob", "email": "bob@example.com", "emailVerified": true,
+      "firstName": "Bob", "lastName": "User", "enabled": true,
+      "credentials": [{ "type": "password", "value": "bob", "temporary": false }],
+      "groups": ["/grp-users"]
+    },
+    {
+      "id": "oid-eve", "username": "eve", "email": "eve@example.com", "emailVerified": true,
+      "firstName": "Eve", "lastName": "Other", "enabled": true,
+      "credentials": [{ "type": "password", "value": "eve", "temporary": false }],
+      "groups": ["/grp-other"]
+    },
+    {
+      "id": "oid-root", "username": "root", "email": "root@example.com", "emailVerified": true,
+      "firstName": "Root", "lastName": "Admin", "enabled": true,
+      "credentials": [{ "type": "password", "value": "root", "temporary": false }],
+      "groups": ["/grp-admin"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "oramcp-web",
+      "name": "oracle-mcp-server admin UI (browser login, authorization code + PKCE)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "oramcp-web-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:3000/auth/callback", "https://mcp.example.com/auth/callback"],
+      "webOrigins": ["+"],
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "protocolMappers": [
+        {
+          "name": "audience-oracle-mcp", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "api://oracle-mcp", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "groups", "protocol": "openid-connect", "protocolMapper": "oidc-group-membership-mapper",
+          "config": { "claim.name": "groups", "full.path": "false", "access.token.claim": "true", "id.token.claim": "true", "userinfo.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "clientId": "oramcp-mcp-client",
+      "name": "Pre-registered public client for MCP clients that do the OAuth login themselves (Claude Code: --client-id)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost*", "http://127.0.0.1*", "https://claude.ai/api/mcp/auth_callback"],
+      "webOrigins": ["+"],
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "protocolMappers": [
+        {
+          "name": "audience-oracle-mcp", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "api://oracle-mcp", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "groups", "protocol": "openid-connect", "protocolMapper": "oidc-group-membership-mapper",
+          "config": { "claim.name": "groups", "full.path": "false", "access.token.claim": "true", "id.token.claim": "true", "userinfo.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "clientId": "oramcp-test",
+      "name": "MCP client stand-in for tests and scripts (password grant)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "audience-oracle-mcp", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "api://oracle-mcp", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "groups", "protocol": "openid-connect", "protocolMapper": "oidc-group-membership-mapper",
+          "config": { "claim.name": "groups", "full.path": "false", "access.token.claim": "true", "id.token.claim": "true", "userinfo.token.claim": "true" }
+        }
+      ]
+    }
+  ]
+}

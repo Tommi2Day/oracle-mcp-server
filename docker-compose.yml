@@ -16,6 +16,52 @@ services:
     networks:
       - mcp-net
 
+  # OIDC identity provider for the OAuth integration tests (docker compose --profile oidc up -d oidc-test).
+  # Issues tokens without a login screen; users/groups are defined in tests/oidc/mock-oauth2-config.json.
+  # Run: OIDC_TEST_ISSUER=http://localhost:8080/default npx vitest run tests/oidc.integration.test.ts
+  oidc-test:
+    image: ghcr.io/navikt/mock-oauth2-server:2.1.10
+    profiles: ["oidc"]
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: "8080"
+      JSON_CONFIG_PATH: /config/config.json
+    volumes:
+      - ./tests/oidc/mock-oauth2-config.json:/config/config.json:ro
+    networks:
+      - mcp-net
+
+  # Real OIDC provider with admin console and login page (docker compose --profile keycloak up -d keycloak).
+  # Realm "oracle-mcp" is imported from tests/oidc/keycloak-realm.json: users alice/bob/eve/root (password = name,
+  # groups grp-dba/grp-users/grp-other/grp-admin), clients oramcp-web (browser login) and oramcp-test (password grant).
+  # Admin console: http://localhost:8081  (admin / admin). Issuer: http://localhost:8081/realms/oracle-mcp
+  # Run: OIDC_TEST_ISSUER=http://localhost:8081/realms/oracle-mcp npx vitest run tests/oidc.integration.test.ts
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    profiles: ["keycloak"]
+    command: ["start-dev", "--import-realm"]
+    ports:
+      - "8081:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      # Token issuer is http://localhost:8081/...; the server container reaches Keycloak as keycloak:8080
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    volumes:
+      - ./tests/oidc/keycloak-realm.json:/opt/keycloak/data/import/oracle-mcp.json:ro
+    healthcheck:
+      # The image has no curl: plain HTTP request to the management port
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks:
+      - mcp-net
+
   oracle-mcp-server:
     build: .
     image: oracle-mcp-server:latest
@@ -67,6 +113,24 @@ services:
       ORA_TUNING_PACK: "${ORA_TUNING_PACK:-false}"
       # X-Oracle-* headers of AUTH_TOKEN clients: none | credentials | full
       ORA_CLIENT_CONNECTION: "${ORA_CLIENT_CONNECTION:-none}"
+
+      # ── OAuth 2.0 / OIDC (Entra ID, …) — see docs/oauth.md; empty OAUTH_ISSUER = off ──
+      OAUTH_ISSUER: "${OAUTH_ISSUER:-}"
+      OAUTH_CLIENT_ID: "${OAUTH_CLIENT_ID:-}"
+      OAUTH_CLIENT_SECRET: "${OAUTH_CLIENT_SECRET:-}"
+      OAUTH_AUDIENCE: "${OAUTH_AUDIENCE:-}"
+      OAUTH_PUBLIC_URL: "${OAUTH_PUBLIC_URL:-}"
+      OAUTH_RESOURCE_SCOPES: "${OAUTH_RESOURCE_SCOPES:-}"
+      # Explicit endpoints skip discovery, e.g. when the server reaches the provider under another name than the browser
+      OAUTH_JWKS_URI: "${OAUTH_JWKS_URI:-}"
+      OAUTH_AUTHORIZATION_ENDPOINT: "${OAUTH_AUTHORIZATION_ENDPOINT:-}"
+      OAUTH_TOKEN_ENDPOINT: "${OAUTH_TOKEN_ENDPOINT:-}"
+      OAUTH_GROUPS_CLAIM: "${OAUTH_GROUPS_CLAIM:-}"
+      OAUTH_ALLOWED_GROUPS: "${OAUTH_ALLOWED_GROUPS:-}"
+      OAUTH_ALLOWED_USERS: "${OAUTH_ALLOWED_USERS:-}"
+      OAUTH_ADMIN_GROUPS: "${OAUTH_ADMIN_GROUPS:-}"
+      OAUTH_ADMIN_USERS: "${OAUTH_ADMIN_USERS:-}"
+      OAUTH_ASSIGNMENTS: "${OAUTH_ASSIGNMENTS:-}"
       # TNS_ADMIN is preset in the image to /opt/oracle/network/admin
 
     volumes:

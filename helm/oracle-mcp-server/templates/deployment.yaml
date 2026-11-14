@@ -103,6 +103,29 @@ spec:
                   key: {{ .Values.auth.existingSecretKey | default "token" }}
             {{- end }}
 
+            # ── OAuth 2.0 / OIDC ──────────────────────────────────────────
+            {{- if and .Values.oauth.enabled .Values.oauth.issuer }}
+            - name: OAUTH_ISSUER
+              value: {{ .Values.oauth.issuer | quote }}
+            {{- range $env, $val := dict "OAUTH_CLIENT_ID" .Values.oauth.clientId "OAUTH_AUDIENCE" .Values.oauth.audience "OAUTH_PUBLIC_URL" .Values.oauth.publicUrl "OAUTH_RESOURCE_SCOPES" .Values.oauth.resourceScopes "OAUTH_GROUPS_CLAIM" .Values.oauth.groupsClaim "OAUTH_EMAIL_CLAIM" .Values.oauth.emailClaim "OAUTH_SCOPES" .Values.oauth.scopes "OAUTH_ALLOWED_GROUPS" .Values.oauth.allowedGroups "OAUTH_ALLOWED_USERS" .Values.oauth.allowedUsers "OAUTH_ADMIN_GROUPS" .Values.oauth.adminGroups "OAUTH_ADMIN_USERS" .Values.oauth.adminUsers }}
+            {{- if $val }}
+            - name: {{ $env }}
+              value: {{ $val | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.oauth.assignments }}
+            - name: OAUTH_ASSIGNMENTS
+              value: {{ .Values.oauth.assignments | toJson | quote }}
+            {{- end }}
+            {{- if or .Values.oauth.existingSecret .Values.oauth.clientSecret }}
+            - name: OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oauth.existingSecret | default (printf "%s-oauth" $fullname) }}
+                  key: client-secret
+            {{- end }}
+            {{- end }}
+
             # ── Oracle ────────────────────────────────────────────────────
             - name: TNS_ADMIN
               value: {{ .Values.tnsAdmin.mountPath | quote }}

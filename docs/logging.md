@@ -22,8 +22,8 @@ Ready-to-use configurations (tested with Filebeat and Logstash 9.5):
 |------|--------|---------|
 | `timestamp` | ISO 8601, UTC, milliseconds (`Date.toISOString()`) | `2026-09-25T10:49:43.427Z` |
 | `LEVEL` | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` | `INFO` |
-| `CATEGORY` | `MCP` \| `SESSION` \| `AUTH` \| `ADMIN` \| `STORE` \| `DB` \| `HTTP` \| `FATAL` | `SESSION` |
-| `message` | structured `key="value"` pairs (MCP, SESSION, AUTH, ADMIN) or free text (other categories) | see below |
+| `CATEGORY` | `MCP` \| `SESSION` \| `AUTH` \| `AUDIT` \| `ADMIN` \| `STORE` \| `DB` \| `HTTP` \| `FATAL` | `SESSION` |
+| `message` | structured `key="value"` pairs (MCP, SESSION, AUTH, AUDIT, ADMIN) or free text (other categories) | see below |
 
 Only lines at or above `LOG_LEVEL` (default `info`) are written.
 
@@ -40,11 +40,12 @@ Pairs are separated by a single space. Values are enclosed in double quotes, exc
 | `MCP` | info | `token` `action` `ip` [`params`] | Tool call. `action` = tool name. `params` is omitted for tools without arguments; `params.sql` is replaced by `<N chars, LOG_LEVEL=debug to show>` unless `LOG_LEVEL=debug` |
 | `MCP` | error | `token` `action` `ip` `error` | Tool call failed |
 | `SESSION` | info | `token` `action` `session` `ip` [`connection` `target` `user`] [`duration`] | `action` = `start` \| `stop`; `duration` only on `stop`; `connection="client"` with `target` / `user` on `start` when the client supplied its own connection parameters (X-Oracle-* headers) |
-| `AUTH` | warn | `result` [`token`] `action` `ip` `reason` | Rejected request (HTTP 401). `result` = `denied`; `action` = `<METHOD> <path>`; `reason` = `missing token` \| `invalid admin token` \| `unknown token` \| `token disabled` (only the last one has `token`), or `client connection: <message>` for rejected X-Oracle-* headers (HTTP 400/403, with `token`). The presented token is never logged |
+| `AUTH` | warn | `result` [`token`] `action` `ip` `reason` | Rejected request (HTTP 401/403). `result` = `denied`; `action` = `<METHOD> <path>`; `reason` = `missing token` \| `invalid admin token` \| `unknown token` \| `token disabled` (only the last one has `token`), `client connection: <message>` for rejected X-Oracle-* headers (HTTP 400/403, with `token`), or `oauth: <message>` for OAuth tokens and logins (`token expired`, `audience not accepted`, `invalid signature`, `no assignment for this user or groups` with `token="<e-mail>"`, `not an admin`, …). The presented token is never logged |
+| `AUDIT` | info | `user` [`sub`] `action` [`session`] [`via`] [`assignment`] [`admin`] `ip` (key order varies; consumers must read by key) | Audit trail of OAuth users ([oauth.md](oauth.md#audit)): `action` = `login` \| `logout` (admin UI), `session_start` (MCP session, with `session`, `assignment` = id of the matched assignment and `admin`), or `<METHOD> <path>` of a changing admin API call (`via="oauth-admin"`). `user` = e-mail (subject if the token has none), `sub` = object id (`oid`/`sub`) |
 | `ADMIN` | info | `token` `action` `ip` | Admin API call; `token` = `admin` or `anonymous` (auth disabled) |
 | `ADMIN` | error | `token` `action` `ip` `error` | Admin API call failed |
 
-`token` is `admin` (the `AUTH_TOKEN`), `anonymous` (auth disabled) or the name of a file token.
+`token` is `admin` (the `AUTH_TOKEN`), `anonymous` (auth disabled), the name of a file token or — with OAuth — the user's e-mail.
 `ip` is resolved from `X-Real-IP` → first `X-Forwarded-For` entry → socket address.
 
 Examples:
@@ -57,6 +58,15 @@ Examples:
 [2026-09-25T10:49:45.889Z] [WARN] [AUTH] result="denied" token="old-laptop" action="POST /mcp" ip="198.51.100.7" reason="token disabled"
 [2026-09-25T10:49:48.695Z] [INFO] [SESSION] token="claude-desktop" action="stop" session="61827f60-6990-4f71-9485-60ae72587db0" ip="192.0.2.21" duration=5s
 [2026-09-25T11:25:33.818Z] [ERROR] [ADMIN] token="admin" action="POST /admin/tokens" ip="192.0.2.10" error="Unexpected token 'b', \"{\"name\": broken\" is not valid JSON"
+```
+
+OAuth examples:
+
+```
+[2026-11-14T09:12:01.120Z] [INFO] [AUDIT] user="alice@example.com" sub="0f9c1c2e-4f9b-4c0a-9d51-6b1a2a7e3c11" action="session_start" session="61827f60-6990-4f71-9485-60ae72587db0" via="oauth" ip="192.0.2.21" assignment="3" admin="false"
+[2026-11-14T09:12:02.411Z] [INFO] [MCP] token="alice@example.com" action="query" ip="192.0.2.21" params={"sql":"<24 chars, LOG_LEVEL=debug to show>"}
+[2026-11-14T09:13:40.002Z] [WARN] [AUTH] result="denied" token="eve@example.com" action="POST /mcp" ip="198.51.100.7" reason="oauth: no assignment for this user or groups"
+[2026-11-14T09:14:02.310Z] [INFO] [AUDIT] user="root@example.com" sub="3b1d…" action="POST /admin/assignments" ip="192.0.2.10" via="oauth-admin"
 ```
 
 ### Free-text messages and multi-line entries

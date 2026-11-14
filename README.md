@@ -27,6 +27,9 @@ other MCP clients) access to **Oracle Database** — the Oracle sibling of
   web admin UI ([screenshots](#admin-ui)), REST API or `admincli.sh`; DB and wallet passwords encrypted at rest;
   admin UI with your own logo and colors ([branding](#admin-ui-branding)); optionally clients log in with their own
   database account or choose the database ([client-supplied connections](#client-supplied-connections))
+- **Single sign-on:** optional **OAuth 2.0 / OpenID Connect** (Microsoft Entra ID, Keycloak, …) — MCP clients send
+  an access token, the admin UI offers SSO, and **groups or e-mails choose the default database connection**
+  (deny by default) — [details](#oauth-20--openid-connect)
 - **Traceable in the database:** each session carries `MODULE`, `ACTION` = tool and `CLIENT_IDENTIFIER` = token
   name ([Session identification](#session-identification)); plus a structured audit log of tool calls, sessions,
   rejected logins and admin actions ([example](#logging))
@@ -43,7 +46,7 @@ kept on the server, and an audit trail in both the log and `V$SESSION`.
 | | Local Oracle MCP servers (e.g. SQLcl `sql -mcp`) | oracle-mcp-server |
 |---|---|---|
 | Deployment | Process per user on the workstation (stdio) | Central service (Docker / Kubernetes) plus stdio |
-| Client authentication | Whoever can start it | Bearer tokens, revocable at runtime |
+| Client authentication | Whoever can start it | Bearer tokens, revocable at runtime, or OAuth 2.0 / OIDC single sign-on |
 | Credentials & wallets | On every client machine | Stay on the server; clients only get a token |
 | Databases per instance | Saved connections of that user | One connection per token, managed centrally |
 | Audit | Log table `DBTOOLS$MCP_LOG` and `V$SESSION` | Server log (token, tool, client IP, rejected logins) and `CLIENT_IDENTIFIER` / `ACTION` in `V$SESSION` |
@@ -70,6 +73,7 @@ any Oracle Database (on-premises, cloud, container) — self-hosted, with no Ora
 - [Configuration reference](#configuration-reference)
 - [Session identification](#session-identification)
 - [Tokens & per-token connections](#tokens--per-token-connections)
+- [OAuth 2.0 / OpenID Connect](#oauth-20--openid-connect)
 - [Logging](#logging)
 - [Kubernetes / Helm](#kubernetes--helm)
 - [Claude skills](#claude-skills)
@@ -301,6 +305,7 @@ Outside the image set `ORA_CLIENT_LIB_DIR` to the Instant Client directory for t
 | `AUTH_TOKEN` | – | Admin bearer token; empty disables auth (dev only) |
 | `TOKENS_FILE` | `./tokens.json` (image: `/data/tokens.json`) | Token store |
 | `STORE_ENCRYPTION_KEY` | – | Encrypts `password` / `wallet_password` in the token store (AES-256-GCM) |
+| `OAUTH_ISSUER` | – | Enables OAuth 2.0 / OIDC (Microsoft Entra ID, Keycloak, …); more `OAUTH_*` variables in [docs/oauth.md](docs/oauth.md) |
 | `MCP_SERVER_NAME` | `oracle-mcp-server` | Name shown in MCP clients and the admin UI |
 | `ORA_CLIENT_CONNECTION` | `none` | `none` \| `credentials` \| `full`: connection parameters clients of the `AUTH_TOKEN` (or anonymous) may send as X-Oracle-* headers ([details](#client-supplied-connections)) |
 | `ADMIN_THEME_CSS` | – | CSS file loaded after the built-in admin UI styles ([branding](#admin-ui-branding)) |
@@ -351,7 +356,7 @@ activity in `V$SESSION`, ASH, AWR, SQL Monitor and the audit trail:
 | `PROGRAM` | `MCP_SERVER_NAME` (thin mode; characters other than `A-Z a-z 0-9 . _ -` become `_`) | `Prod_DB__EU_` |
 | `MODULE` | `MCP_SERVER_NAME` | `Prod DB (EU)` |
 | `ACTION` | tool name; `mcp-perf:<tool>` while a performance tool runs its own statements | `query`, `mcp-perf:top_sql` |
-| `CLIENT_IDENTIFIER` | token name (`admin` for `AUTH_TOKEN`, `anonymous` without auth, `stdio` in stdio mode) | `claude-desktop` |
+| `CLIENT_IDENTIFIER` | token name (`admin` for `AUTH_TOKEN`, `anonymous` without auth, `stdio` in stdio mode, the user's e-mail with [OAuth](#oauth-20--openid-connect)) | `claude-desktop` |
 | `CLIENT_INFO` | server name, version and MCP client IP | `Prod DB (EU) 0.1.0 ip=10.0.0.7` |
 
 The attributes are set on every checkout from the pool (tokens with the same effective connection share
@@ -510,6 +515,10 @@ status, connection (server default, host / service or TNS alias) and last use:
   </tr>
 </table>
 
+With OAuth configured, *Sign in with single sign-on* logs in members of an admin group/user, and the section
+**OAuth assignments** maps groups or e-mails to a default connection, client-connection mode and the admin role
+(assignments from environment variables are listed read-only).
+
 Editing a token changes its name, active state or connection; passwords are never shown and stay unchanged when
 the field is left empty. Deleting a token revokes access immediately.
 
@@ -575,6 +584,34 @@ kubectl -n mcp create configmap mcp-branding --from-file=examples/admin-theme/th
     <td width="30%" valign="top"><b>Login</b><br><img src="docs/images/admin-branding-login.png" alt="Admin UI login with corporate logo"></td>
   </tr>
 </table>
+
+---
+
+## OAuth 2.0 / OpenID Connect
+
+Instead of (or next to) bearer tokens, users can authenticate with an OpenID Connect provider — primarily **Microsoft
+Entra ID**, also Keycloak, Okta and others. Set `OAUTH_ISSUER`; MCP clients then send an OAuth access token (JWT) as
+bearer token, which the server validates locally (signature via JWKS, issuer, audience, lifetime).
+
+- **Authorization by assignment (deny by default):** a user may use the server if their e-mail or one of their groups
+  is assigned — via `OAUTH_ALLOWED_GROUPS`, `OAUTH_ALLOWED_USERS`, `OAUTH_ADMIN_GROUPS`, `OAUTH_ADMIN_USERS`,
+  `OAUTH_ASSIGNMENTS` or in the admin UI (*OAuth assignments*).
+- **Default connection by group or e-mail:** an assignment can carry an Oracle connection (TNS alias, host/service,
+  user, …) that the user gets; users without one use the server default. `client_connection` lets selected users bring
+  their own database account.
+- **Attributable:** `CLIENT_IDENTIFIER` in `V$SESSION` and the `[MCP]` / `[SESSION]` log lines carry the user's e-mail;
+  `[AUDIT]` lines record logins, MCP sessions and admin changes.
+- `AUTH_TOKEN` and file tokens keep working (break-glass admin).
+
+```bash
+OAUTH_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0
+OAUTH_CLIENT_ID=<app-id>  OAUTH_CLIENT_SECRET=<secret>  OAUTH_AUDIENCE=api://<app-id>
+OAUTH_PUBLIC_URL=https://mcp.example.com
+OAUTH_ADMIN_GROUPS=<admin-group-object-id>  OAUTH_ALLOWED_GROUPS=<user-group-object-id>
+```
+
+MCP clients can send such a token as a header or log in by themselves ([client setup](docs/oauth.md#mcp-clients)).
+Full reference, Entra setup steps and security notes: [docs/oauth.md](docs/oauth.md).
 
 ---
 
@@ -683,6 +720,21 @@ Remote (HTTP):
 }
 ```
 
+With [OAuth](#oauth-20--openid-connect) the client can log in by itself — only the URL is configured, the client
+finds the identity provider through the server's `/.well-known/oauth-protected-resource` and refreshes the token:
+
+```json
+{ "mcpServers": { "oracle": { "type": "http", "url": "https://oracle-mcp.example.com/mcp" } } }
+```
+
+```bash
+# Claude Code; the provider needs a pre-registered public client (Entra ID has no dynamic registration)
+claude mcp add --transport http --client-id <client-id> oracle https://oracle-mcp.example.com/mcp
+```
+
+A static `Authorization: Bearer <access token>` header works as well, but access tokens expire. Provider
+requirements (client registration, audience, scopes) and `OAUTH_RESOURCE_SCOPES`: [docs/oauth.md](docs/oauth.md#mcp-clients).
+
 Local (stdio): see `example.mcp.json`.
 
 ---
@@ -692,7 +744,8 @@ Local (stdio): see `example.mcp.json`.
 ```bash
 npm ci
 npm run build          # tsc → dist/
-npm test               # vitest (unit tests, no database needed)
+npm test               # vitest (unit tests, no database needed; integration tests are skipped)
+npm run test:integration  # against Docker: Oracle Free + OIDC provider, see below
 npm run lint
 npm run typecheck
 ./scripts/test.sh      # tests in Docker, no local Node.js needed
@@ -700,8 +753,28 @@ docker build -t oracle-mcp-server .                                   # thin ima
 docker build --build-arg ORACLE_THICK=true -t oracle-mcp-server:thick .  # with Instant Client
 ```
 
+Integration tests (real Oracle database and a real OIDC provider, skipped unless the variable is set):
+
+```bash
+docker compose --profile oidc up -d oracle-test oidc-test    # wait until oracle-test is healthy
+ORA_TEST_HOST=localhost OIDC_TEST_ISSUER=http://localhost:8080/default npm run test:integration
+docker compose --profile oidc down
+# OIDC tests against a real provider with login form (Keycloak) instead of the mock server:
+docker compose --profile keycloak up -d --wait keycloak
+OIDC_TEST_ISSUER=http://localhost:8081/realms/oracle-mcp npx vitest run tests/oidc.integration.test.ts
+```
+
+To try the admin UI's single sign-on yourself, [docs/oauth.md](docs/oauth.md#trying-it-locally-with-keycloak) starts
+the whole stack with a Keycloak realm (admin console, users and groups included).
+
+They run every MCP tool against sample schemas, the [Claude skills](#claude-skills) on real data (blocking chain,
+slow statement and index fix, deadlock → alert log → trace file; `tests/skills.test.ts` checks without a database that
+skills and tool schemas agree), the OAuth path end to end (group / e-mail → schema, `V$SESSION`
+tags, client-supplied credentials, assignment admin API) and the token validation against the provider
+([docs/oauth.md](docs/oauth.md#tests)).
+
 Source layout: `src/oracle.ts` (connect strings, JDBC parsing, pool attributes, wallets — pure),
-`src/lib.ts` (logging, auth, token store, admin API), `src/perf.ts` (performance tools and licence gating),
+`src/lib.ts` (logging, auth, token store, admin API), `src/oauth.ts` / `src/oauth-routes.ts` (OAuth 2.0 / OIDC), `src/perf.ts` (performance tools and licence gating),
 `src/format.ts` (result formatting), `src/index.ts` (MCP tools, HTTP routing, startup).
 Log format: see [docs/logging.md](docs/logging.md). Performance tools: [docs/performance.md](docs/performance.md). Claude skills: [docs/skills.md](docs/skills.md).
 

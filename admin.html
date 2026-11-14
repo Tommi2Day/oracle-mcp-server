@@ -578,6 +578,11 @@
       main { padding: 1rem; }
     }
   </style>
+  <style>
+    .assign-hint { font-size: .8125rem; color: var(--text-muted); margin: 0 0 .75rem; }
+    .assign-kind { font-size: .6875rem; color: var(--text-muted); text-transform: uppercase; margin-right: .4rem; }
+    #assign-section { margin-top: 2rem; }
+  </style>
   <!--theme-->
 </head>
 <body>
@@ -612,6 +617,11 @@
     </div>
 
     <button class="btn-primary" id="login-btn" onclick="login()">Sign in</button>
+
+    <div id="sso-box" style="display:none">
+      <hr class="divider">
+      <button class="btn-primary" id="sso-btn" onclick="ssoLogin()">Sign in with single sign-on</button>
+    </div>
   </div>
 </div>
 
@@ -678,6 +688,41 @@
         </table>
       </div>
     </div>
+
+    <div id="assign-section" style="display:none">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <h2>OAuth assignments</h2>
+          <span class="token-count" id="assign-count"></span>
+        </div>
+        <div class="toolbar-right">
+          <button class="btn-new" onclick="openAssignModal()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            New Assignment
+          </button>
+        </div>
+      </div>
+      <p class="assign-hint" id="assign-hint"></p>
+      <div id="assign-error" class="alert alert-error"></div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-name">Group / user</th>
+                <th class="col-status">Role</th>
+                <th class="col-conn hide-sm">Default connection</th>
+                <th class="col-date hide-sm">Source</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="assign-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -701,7 +746,7 @@
 'use strict';
 
 // ── State ─────────────────────────────────────────────────────────────────────
-const state = { serverUrl: '', token: '', tokens: [], serverInfo: null };
+const state = { serverUrl: '', token: '', tokens: [], serverInfo: null, sso: false, me: null, assignments: [] };
 
 // ── Session storage ───────────────────────────────────────────────────────────
 function saveSession() {
@@ -720,7 +765,9 @@ async function api(method, path, body) {
     headers: {
       ...(state.token ? { 'Authorization': 'Bearer ' + state.token } : {}),
       'Content-Type':  'application/json',
+      'X-Requested-With': 'oracle-mcp-admin', // CSRF protection of the SSO session cookie
     },
+    credentials: 'same-origin',
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
@@ -763,7 +810,14 @@ async function login() {
   }
 }
 
+/** SSO: redirect to the identity provider; the session cookie is set on return. */
+function ssoLogin() {
+  window.location.href = '/auth/login';
+}
+
 function logout() {
+  if (state.sso) fetch('/auth/logout', { method: 'POST', headers: { 'X-Requested-With': 'oracle-mcp-admin' } }).catch(() => {});
+  state.sso = false;
   clearSession();
   state.serverUrl = '';
   state.token     = '';
@@ -780,6 +834,7 @@ function showMain() {
   document.getElementById('main-view').style.display  = 'flex';
   document.getElementById('server-pill').textContent  = state.serverUrl;
   loadServerInfo();
+  loadMe();
   renderTokens();
 }
 
@@ -1057,6 +1112,144 @@ async function submitDelete(id) {
   }
 }
 
+// ── OAuth assignments ─────────────────────────────────────────────────────────
+async function loadMe() {
+  try { state.me = await api('GET', '/admin/me'); } catch (e) { state.me = null; }
+  const oauth = state.me && state.me.oauth;
+  document.getElementById('assign-section').style.display = oauth ? 'block' : 'none';
+  if (!oauth) return;
+  document.getElementById('assign-hint').textContent =
+    `Signed in as ${state.me.email || state.me.name} (${state.me.method}). Issuer: ${oauth.issuer} · groups claim: ${oauth.groups_claim}. ` +
+    'Only users or groups listed here may use the server; a user entry wins over a group entry.';
+  loadAssignments();
+}
+
+async function loadAssignments() {
+  try {
+    state.assignments = (await api('GET', '/admin/assignments')).assignments || [];
+    document.getElementById('assign-error').style.display = 'none';
+  } catch (e) {
+    showAlert(document.getElementById('assign-error'), 'Failed to load assignments: ' + e.message);
+  }
+  renderAssignments();
+}
+
+function assignmentSubject(a) {
+  return `<span class="assign-kind">${a.group ? 'group' : 'user'}</span>${x(a.group || a.user)}`;
+}
+
+function assignmentActions(a) {
+  if (a.source === 'env') return '<span class="date-never">read-only</span>';
+  return `<div class="actions">
+          <button class="btn-icon" onclick="openAssignModal(${a.id})" title="Edit assignment">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </button>
+          <button class="btn-icon danger" onclick="openAssignDeleteModal(${a.id})" title="Delete assignment">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6l-1 14H6L5 6"/>
+              <path d="M10 11v6M14 11v6M9 6V4h6v2"/>
+            </svg>
+          </button>
+        </div>`;
+}
+
+function renderAssignments() {
+  const list = state.assignments;
+  document.getElementById('assign-count').textContent = list.length ? `${list.length}` : '';
+  document.getElementById('assign-tbody').innerHTML = list.length ? list.map(a => `
+    <tr>
+      <td class="col-name">${assignmentSubject(a)}</td>
+      <td class="col-status">${a.admin ? 'admin' : 'user'}</td>
+      <td class="col-conn hide-sm">${renderConn(a.connection)}${renderClientConn(a.client_connection)}</td>
+      <td class="col-date hide-sm">${x(a.source === 'env' ? 'environment' : 'admin UI')}</td>
+      <td class="col-actions">${assignmentActions(a)}</td>
+    </tr>`).join('')
+    : '<tr class="state-row"><td colspan="5">No assignments — nobody can sign in with OAuth.</td></tr>';
+}
+
+function assignmentForm(a) {
+  const isUser = !!(a && a.user);
+  return `
+    <div id="modal-alert" class="alert alert-error"></div>
+    <div class="field">
+      <label for="f-kind">Matches</label>
+      <select id="f-kind" ${a ? 'disabled' : ''}>
+        <option value="group" ${isUser ? '' : 'selected'}>Group (object id / name from the groups claim)</option>
+        <option value="user" ${isUser ? 'selected' : ''}>User (e-mail, object id, or *@domain.example)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-subject">Group or user</label>
+      <input id="f-subject" type="text" ${a ? 'disabled' : ''} value="${x(a ? (a.group || a.user) : '')}" autocomplete="off"
+             placeholder="e.g. 3f2c…-group-object-id or alice@example.com">
+    </div>
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+        <label class="toggle" style="margin:0">
+          <input type="checkbox" id="f-admin" ${a && a.admin ? 'checked' : ''}>
+          <span class="toggle-track"></span><span class="toggle-thumb"></span>
+        </label>
+        Admin (may use this admin UI)
+      </label>
+    </div>
+    <div class="field">
+      <label for="f-clientconn">Client-supplied connection
+        <span style="font-weight:400;color:var(--text-muted)">(X-Oracle-* headers)</span></label>
+      <select id="f-clientconn">${clientConnOptions(a && a.client_connection)}</select>
+    </div>
+    ${connSection(a)}`;
+}
+
+function openAssignModal(id) {
+  const a = id === undefined ? null : state.assignments.find(e => e.id === id);
+  showModal(a ? 'Edit Assignment' : 'New Assignment', assignmentForm(a), [
+    { label: 'Cancel', cls: 'btn-cancel', fn: 'closeModal()' },
+    { label: 'Save',   cls: 'btn-submit', fn: `submitAssign(${a ? a.id : 'null'})`, id: 'modal-primary' },
+  ]);
+}
+
+async function submitAssign(id) {
+  const subject = document.getElementById('f-subject').value.trim();
+  if (id === null && !subject) { flashInput(document.getElementById('f-subject'), 'Group or user is required'); return; }
+  const body = { admin: document.getElementById('f-admin').checked, connection: readConn(), client_connection: readClientConn() };
+  if (id === null) body[document.getElementById('f-kind').value] = subject;
+  const btn = document.getElementById('modal-primary');
+  btn.disabled = true;
+  try {
+    await api(id === null ? 'POST' : 'PATCH', id === null ? '/admin/assignments' : `/admin/assignments/${id}`, body);
+    closeModal();
+    loadAssignments();
+  } catch (e) {
+    btn.disabled = false;
+    showAlert(document.getElementById('modal-alert'), e.message);
+  }
+}
+
+function openAssignDeleteModal(id) {
+  const a = state.assignments.find(e => e.id === id);
+  if (!a) return;
+  showModal('Delete Assignment', `
+    <div id="modal-alert" class="alert alert-error"></div>
+    <div class="delete-warning">Removing <strong>${x(a.group || a.user)}</strong> revokes access for everyone who only matched this entry.</div>`, [
+    { label: 'Cancel', cls: 'btn-cancel',     fn: 'closeModal()' },
+    { label: 'Delete', cls: 'btn-deactivate', fn: `submitAssignDelete(${id})`, id: 'modal-primary' },
+  ]);
+}
+
+async function submitAssignDelete(id) {
+  try {
+    await api('DELETE', `/admin/assignments/${id}`);
+    closeModal();
+    loadAssignments();
+  } catch (e) {
+    showAlert(document.getElementById('modal-alert') || document.getElementById('assign-error'), e.message);
+  }
+}
+
 // ── Token form builder ────────────────────────────────────────────────────────
 /** Server default connection shown next to "Use default connection". */
 function defaultConnInfo() {
@@ -1092,13 +1285,6 @@ function activeField(t) {
 }
 
 function buildForm(t) {
-  const c        = (t && t.connection) || {};
-  const hasConn  = !!(t && t.connection);
-  const defInfo  = defaultConnInfo();
-  const ctype    = connType(c);
-  const pwHint   = c.password_set ? 'unchanged' : '••••••••';
-  const wpwHint  = c.wallet_password_set ? 'unchanged' : 'only for encrypted ewallet.pem';
-  const dnMatch  = c.ssl_server_dn_match === undefined ? '' : String(c.ssl_server_dn_match);
   return `
     <div id="modal-alert" class="alert alert-error"></div>
 
@@ -1115,6 +1301,19 @@ function buildForm(t) {
       <select id="f-clientconn">${clientConnOptions(t && t.client_connection)}</select>
     </div>
 
+    ${connSection(t)}`;
+}
+
+/** Divider plus the default / own connection fields (tokens and assignments). */
+function connSection(t) {
+  const c        = (t && t.connection) || {};
+  const hasConn  = !!(t && t.connection);
+  const defInfo  = defaultConnInfo();
+  const ctype    = connType(c);
+  const pwHint   = c.password_set ? 'unchanged' : '••••••••';
+  const wpwHint  = c.wallet_password_set ? 'unchanged' : 'only for encrypted ewallet.pem';
+  const dnMatch  = c.ssl_server_dn_match === undefined ? '' : String(c.ssl_server_dn_match);
+  return `
     <hr class="divider">
 
     <div class="conn-section">
@@ -1358,12 +1557,31 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && document.getElementById('login-view').style.display !== 'none') login();
 });
 
+// ── SSO (OAuth) ───────────────────────────────────────────────────────────────
+/** Shows the SSO button and continues an existing SSO session (cookie) without a token. */
+async function checkSso() {
+  let st;
+  try { st = await (await fetch('/auth/status', { credentials: 'same-origin' })).json(); } catch (e) { return; }
+  if (!st.enabled) return;
+  if (st.login) document.getElementById('sso-box').style.display = 'block';
+  if (st.authenticated && st.admin && !state.token) {
+    state.sso = true;
+    state.serverUrl = window.location.origin;
+    showMain();
+    loadTokens();
+  } else if (st.authenticated && !st.admin) {
+    showAlert(document.getElementById('login-error'), 'Signed in, but your account has no admin rights.');
+  }
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 (function init() {
   // Pre-fill URL from current origin so /admin works out of the box
   const origin = window.location.origin;
   document.getElementById('inp-url').value =
     (origin && origin !== 'null') ? origin : 'http://localhost:3000';
+
+  checkSso();
 
   // Try to restore session
   const savedUrl   = sessionStorage.getItem('pms_url');

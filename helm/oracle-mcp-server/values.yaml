@@ -102,6 +102,36 @@ auth:
   storeEncryptionKey: ""
   # storeEncryptionKeySecret: "my-store-key"   # Secret key must be "key"
 
+# ── OAuth 2.0 / OpenID Connect (Microsoft Entra ID, Keycloak, …) ──────────────
+# Alternative to bearer tokens: MCP clients send an access token (JWT), the admin UI offers single sign-on.
+# Deny by default: only users/groups listed in allowedGroups / allowedUsers / adminGroups / adminUsers /
+# assignments (or created in the admin UI) may connect. See docs/oauth.md.
+oauth:
+  enabled: false
+  # Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0
+  issuer: ""
+  clientId: ""                 # app registration of this server (browser login, default audience)
+  audience: ""                 # accepted "aud" values, comma separated (default: clientId)
+  publicUrl: ""                # external URL, e.g. https://mcp.example.com (redirect URI = <publicUrl>/auth/callback)
+  resourceScopes: ""           # scopes MCP clients are told to request (default: <audience>/.default; Keycloak: a client scope name)
+  # Client secret for the browser login: inline (creates a Secret) or existingSecret with key "client-secret"
+  clientSecret: ""
+  existingSecret: ""
+  groupsClaim: ""              # default: groups (Entra: groups, or roles for app roles)
+  emailClaim: ""               # default: email, preferred_username, upn
+  scopes: ""                   # default: openid profile email
+  allowedGroups: ""            # comma separated group ids; may use the server with the default connection
+  allowedUsers: ""             # comma separated e-mails (or *@domain)
+  adminGroups: ""
+  adminUsers: ""
+  # Group/user → connection, e.g.
+  # assignments:
+  #   - group: "11111111-2222-3333-4444-555555555555"
+  #     connection: { tns_alias: REPORTING, user: ro }
+  #     client_connection: none
+  # (passwords in values are visible in the Deployment; prefer the admin UI + auth.storeEncryptionKey for those)
+  assignments: []
+
 # ── Admin UI branding (corporate logo and colors) ─────────────────────────────
 # ConfigMap with a stylesheet (overrides the CSS variables of admin.html) and a logo,
 # mounted read-only at /branding:

@@ -10,6 +10,11 @@ import {
   CLIENT_CREDENTIAL_FIELDS, CLIENT_TARGET_FIELDS,
   type OraConnection, type ClientConnectionMode,
 } from "./oracle.js";
+import {
+  getOAuthConfig, verifyJwt, looksLikeJwt, identityFromClaims, resolveAccess, envAssignments,
+  sessionFromRequest, safeLogValue, OAuthError, assignmentError, ASSIGNMENT_FIELDS,
+  type Assignment, type Identity, type OAuthConfig,
+} from "./oauth.js";
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -38,6 +43,13 @@ export function getClientIp(req: IncomingMessage): string {
   const fwd = req.headers?.["x-forwarded-for"];
   if (typeof fwd === "string" && fwd) return fwd.split(",")[0].trim();
   return req.socket?.remoteAddress || "-";
+}
+
+/** Audit trail line `[AUDIT] key="value" …` (who did what); values are sanitized, never contains secrets. */
+export function audit(fields: Record<string, unknown>): void {
+  const parts = Object.entries(fields).filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${k}="${safeLogValue(v, 256)}"`);
+  log("info", "AUDIT", parts.join(" "));
 }
 
 function logAuthFailure(req: IncomingMessage, reason: string, tokenName?: string): void {
@@ -80,9 +92,17 @@ export interface TokenRecord {
   client_connection?: ClientConnectionMode;
 }
 
+/** OAuth assignment created in the admin UI (stored next to the tokens). */
+export interface StoredAssignment extends Assignment {
+  id: number;
+  created_at: string;
+}
+
 export interface TokenStore {
   tokens: TokenRecord[];
   next_id: number;
+  assignments?: StoredAssignment[];
+  next_assignment_id?: number;
 }
 
 /** Connection fields that are encrypted at rest when STORE_ENCRYPTION_KEY is set. */
@@ -134,8 +154,8 @@ function decryptValue(value: unknown): unknown {
   }
 }
 
-function mapSecrets(conn: OraConnection | null, fn: (v: string) => unknown): OraConnection | null {
-  if (!conn) return conn;
+function mapSecrets(conn: OraConnection | null | undefined, fn: (v: string) => unknown): OraConnection | null {
+  if (!conn) return null;
   const out: OraConnection = { ...conn };
   for (const f of SECRET_FIELDS) {
     if (typeof out[f] === "string" && out[f]) out[f] = fn(out[f] as string) as string;
@@ -143,12 +163,21 @@ function mapSecrets(conn: OraConnection | null, fn: (v: string) => unknown): Ora
   return out;
 }
 
+/** Applies fn to the stored connection secrets of every token and assignment. */
+function mapStoreSecrets(data: TokenStore, fn: (v: string) => unknown): TokenStore {
+  const map = <T extends { connection?: OraConnection | null }>(e: T): T => ({ ...e, connection: mapSecrets(e.connection, fn) });
+  return {
+    ...data,
+    tokens: data.tokens.map(map),
+    ...(Array.isArray(data.assignments) && { assignments: data.assignments.map(map) }),
+  };
+}
+
 export function loadTokenStore(): TokenStore {
   if (tokenStoreCache) return tokenStoreCache;
   const file = getTokensFile();
   try {
-    const data = JSON.parse(fs.readFileSync(file, "utf8")) as TokenStore;
-    for (const token of data.tokens) token.connection = mapSecrets(token.connection, decryptValue);
+    const data = mapStoreSecrets(JSON.parse(fs.readFileSync(file, "utf8")) as TokenStore, decryptValue);
     tokenStoreCache = data;
     return data;
   } catch (e) {
@@ -159,14 +188,12 @@ export function loadTokenStore(): TokenStore {
 
 export function saveTokenStore(data: TokenStore): void {
   const file = getTokensFile();
-  const toWrite = getEncryptionKey()
-    ? { ...data, tokens: data.tokens.map(t => ({ ...t, connection: mapSecrets(t.connection, encryptValue) })) }
-    : data;
+  const toWrite = getEncryptionKey() ? mapStoreSecrets(data, encryptValue) : data;
   fs.writeFileSync(file, JSON.stringify(toWrite, null, 2), { encoding: "utf8", mode: 0o600 });
   tokenStoreCache = data;
 }
 
-/** On startup: find any tokens whose stored secrets are still plaintext and encrypt them. */
+/** On startup: find any tokens / assignments whose stored secrets are still plaintext and encrypt them. */
 export function migrateTokenStore(): void {
   if (!getEncryptionKey()) return;
   const file = getTokensFile();
@@ -178,15 +205,14 @@ export function migrateTokenStore(): void {
     throw e;
   }
   let plainCount = 0;
-  for (const t of rawData.tokens) {
+  for (const t of [...rawData.tokens, ...(rawData.assignments ?? [])]) {
     for (const f of SECRET_FIELDS) {
       const v = t.connection?.[f];
       if (typeof v === "string" && v && !v.startsWith(ENC_PREFIX)) plainCount++;
     }
   }
   if (plainCount === 0) return;
-  for (const token of rawData.tokens) token.connection = mapSecrets(token.connection, decryptValue);
-  saveTokenStore(rawData); // re-encrypts every secret
+  saveTokenStore(mapStoreSecrets(rawData, decryptValue)); // re-encrypts every secret
   log("info", "STORE", `Encrypted ${plainCount} plaintext secret(s) in token store.`);
 }
 
@@ -198,11 +224,18 @@ export function extractBearer(req: IncomingMessage): string {
 
 export function send401(res: ServerResponse): void {
   const realm = process.env.MCP_SERVER_NAME || "oracle-mcp-server";
+  const publicUrl = getOAuthConfig()?.publicUrl;
+  const metadata = publicUrl ? `, resource_metadata="${publicUrl}/.well-known/oauth-protected-resource"` : "";
   res.writeHead(401, {
     "Content-Type": "application/json",
-    "WWW-Authenticate": `Bearer realm="${realm}"`,
+    "WWW-Authenticate": `Bearer realm="${realm}"${metadata}`,
   });
   res.end(JSON.stringify({ error: "Unauthorized" }));
+}
+
+export function send403(res: ServerResponse, message = "Forbidden"): void {
+  res.writeHead(403, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: message }));
 }
 
 export function readBody(req: IncomingMessage): Promise<string> {
@@ -242,8 +275,16 @@ export function checkAdminAuth(req: IncomingMessage, res: ServerResponse): boole
   return true;
 }
 
+export interface SessionIdentity {
+  sub: string;
+  email: string | null;
+  name: string | null;
+  assignment?: string;
+  admin: boolean;
+}
+
 export type AuthResult =
-  | { ok: true; name: string; connection: OraConnection | null; clientConnection: ClientConnectionMode }
+  | { ok: true; name: string; connection: OraConnection | null; clientConnection: ClientConnectionMode; identity?: SessionIdentity }
   | { ok: false };
 
 /** client_connection for the AUTH_TOKEN / anonymous sessions (ORA_CLIENT_CONNECTION, default none). */
@@ -251,18 +292,47 @@ export function envClientConnectionMode(): ClientConnectionMode {
   return parseClientConnectionMode(process.env.ORA_CLIENT_CONNECTION) ?? "none";
 }
 
-/** MCP auth — accepts AUTH_TOKEN env var OR any active file token. */
-export async function checkAuth(req: IncomingMessage, res: ServerResponse): Promise<AuthResult> {
-  const authToken = getAuthToken();
-  if (!authToken) return { ok: true, name: "anonymous", connection: null, clientConnection: envClientConnectionMode() };
-  const token = extractBearer(req);
-  if (!token) { logAuthFailure(req, "missing token"); send401(res); return { ok: false }; }
-  if (timingSafeEqual(token, authToken)) {
-    return { ok: true, name: "admin", connection: null, clientConnection: envClientConnectionMode() };
+/** All assignments: env (read-only) first, then the ones stored via the admin UI. */
+export function allAssignments(): Assignment[] {
+  return [...envAssignments(), ...(loadTokenStore().assignments ?? [])];
+}
+
+/** Validates a bearer JWT. Returns { identity } or { error } (reason safe to log). */
+async function verifyBearerIdentity(token: string, oauth: OAuthConfig): Promise<{ identity?: Identity; error?: string }> {
+  try {
+    return { identity: identityFromClaims(await verifyJwt(token, oauth), oauth) };
+  } catch (e) {
+    return { error: e instanceof OAuthError ? e.message : "token validation failed" };
   }
-  const hash = hashToken(token);
+}
+
+/** Authenticated identity → access decision; a denial is logged (AUTH). */
+function decideAccess(req: IncomingMessage, identity: Identity) {
+  const access = resolveAccess(identity, allAssignments());
+  if (!access.allowed) {
+    const hint = identity.groupsOverage ? " (token has too many groups: group list not included - use app-assigned groups or roles)" : "";
+    logAuthFailure(req, `oauth: no assignment for this user or groups${hint}`, identity.display);
+  }
+  return access;
+}
+
+/** MCP request with an OAuth access token (JWT). */
+async function checkOAuthBearer(req: IncomingMessage, res: ServerResponse, token: string, oauth: OAuthConfig): Promise<AuthResult> {
+  const { identity, error } = await verifyBearerIdentity(token, oauth);
+  if (!identity) { logAuthFailure(req, `oauth: ${error}`); send401(res); return { ok: false }; }
+  const access = decideAccess(req, identity);
+  if (!access.allowed) { send403(res, "No access: user or groups are not assigned to this server"); return { ok: false }; }
+  return {
+    ok: true, name: identity.display, connection: access.connection ?? null,
+    clientConnection: parseClientConnectionMode(access.clientConnection) ?? "none",
+    identity: { sub: identity.sub, email: identity.email, name: identity.name, assignment: access.assignment, admin: access.admin },
+  };
+}
+
+/** File-token lookup for /mcp (see checkAuth). */
+function checkFileToken(req: IncomingMessage, res: ServerResponse, token: string): AuthResult {
   const store = loadTokenStore();
-  const entry = store.tokens.find(t => t.token_hash === hash);
+  const entry = store.tokens.find(t => t.token_hash === hashToken(token));
   if (!entry) { logAuthFailure(req, "unknown token"); send401(res); return { ok: false }; }
   if (!entry.active) { logAuthFailure(req, "token disabled", entry.name); send401(res); return { ok: false }; }
   entry.last_used_at = new Date().toISOString();
@@ -271,6 +341,67 @@ export async function checkAuth(req: IncomingMessage, res: ServerResponse): Prom
     ok: true, name: entry.name, connection: entry.connection || null,
     clientConnection: parseClientConnectionMode(entry.client_connection) ?? "none",
   };
+}
+
+/** MCP auth — accepts AUTH_TOKEN env var, any active file token or (OAUTH_ISSUER set) an OAuth access token.
+ *  Without AUTH_TOKEN and OAuth, auth is disabled. */
+export async function checkAuth(req: IncomingMessage, res: ServerResponse): Promise<AuthResult> {
+  const authToken = getAuthToken();
+  const oauth = getOAuthConfig();
+  if (!authToken && !oauth) return { ok: true, name: "anonymous", connection: null, clientConnection: envClientConnectionMode() };
+  const token = extractBearer(req);
+  if (!token) { logAuthFailure(req, "missing token"); send401(res); return { ok: false }; }
+  if (authToken && timingSafeEqual(token, authToken)) {
+    return { ok: true, name: "admin", connection: null, clientConnection: envClientConnectionMode() };
+  }
+  if (oauth && looksLikeJwt(token)) return checkOAuthBearer(req, res, token, oauth);
+  return checkFileToken(req, res, token);
+}
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+export type AdminAuth =
+  | { ok: true; name: string; method: "token" | "none" | "oauth"; identity?: Identity }
+  | { ok: false };
+
+/** Identity behind an admin request: bearer JWT, else the browser session cookie. */
+async function adminIdentity(req: IncomingMessage, token: string, oauth: OAuthConfig):
+  Promise<{ identity?: Identity; via?: "bearer" | "session"; error?: string }> {
+  if (token && looksLikeJwt(token)) return { ...await verifyBearerIdentity(token, oauth), via: "bearer" };
+  const session = sessionFromRequest(req);
+  return session ? { identity: session.identity, via: "session" } : { error: "missing token" };
+}
+
+/**
+ * Admin API / Admin UI authentication (res is already answered when not ok).
+ *  - AUTH_TOKEN bearer -> "admin"
+ *  - OAuth (OAUTH_ISSUER): bearer JWT or login session of a user whose assignment has admin:true.
+ *    Session cookies are protected against CSRF: changing requests need an X-Requested-With header.
+ *  - neither configured -> "anonymous"
+ */
+export async function authenticateAdmin(req: IncomingMessage, res: ServerResponse): Promise<AdminAuth> {
+  const oauth = getOAuthConfig();
+  if (!oauth) {
+    if (!checkAdminAuth(req, res)) return { ok: false };
+    return getAuthToken() ? { ok: true, name: "admin", method: "token" } : { ok: true, name: "anonymous", method: "none" };
+  }
+  const token = extractBearer(req);
+  const authToken = getAuthToken();
+  if (token && authToken && timingSafeEqual(token, authToken)) return { ok: true, name: "admin", method: "token" };
+  const { identity, via, error } = await adminIdentity(req, token, oauth);
+  if (!identity) { logAuthFailure(req, `oauth: ${error}`); send401(res); return { ok: false }; }
+  const access = decideAccess(req, identity);
+  if (!access.admin) {
+    if (access.allowed) logAuthFailure(req, "oauth: not an admin", identity.display);
+    send403(res, "Admin rights required");
+    return { ok: false };
+  }
+  if (via === "session" && !SAFE_METHODS.has(req.method || "GET") && !req.headers?.["x-requested-with"]) {
+    logAuthFailure(req, "oauth: missing X-Requested-With header (CSRF protection)", identity.display);
+    send403(res, "Missing X-Requested-With header");
+    return { ok: false };
+  }
+  return { ok: true, name: identity.display, method: "oauth", identity };
 }
 
 // ── Client-supplied connection (X-Oracle-* headers) ──────────────────────────
@@ -384,30 +515,41 @@ function mergeSecrets(updated: OraConnection | null, existing: OraConnection | n
   return out;
 }
 
+/** Called for tokens and assignments alike (both carry a connection → pool). */
 export interface AdminHooks {
-  onDelete?: (token: TokenRecord) => void;
-  onUpdate?: (before: TokenRecord, after: TokenRecord) => void;
+  onDelete?: (entry: { connection?: OraConnection | null }) => void;
+  onUpdate?: (before: { connection?: OraConnection | null }, after: { connection?: OraConnection | null; active?: boolean }) => void;
 }
 
 const CLIENT_MODE_ERROR = '"client_connection" must be none, credentials or full';
 
+/** ADMIN log line of every call; changing calls of OAuth users are also audited.
+ *  Auth disabled → requests are unauthenticated; OAuth → the user's e-mail (or subject) is the actor. */
+function logAdminCall(req: IncomingMessage, pathname: string, ip: string, admin: Extract<AdminAuth, { ok: true }>): void {
+  const method = req.method || "GET";
+  log("info", "ADMIN", `token="${admin.name}" action="${method} ${pathname}" ip="${ip}"`);
+  if (admin.identity && !SAFE_METHODS.has(method)) {
+    audit({ user: admin.identity.display, sub: admin.identity.sub, action: `${method} ${pathname}`, ip, via: "oauth-admin" });
+  }
+}
+
 export async function handleAdminRequest(req: IncomingMessage, res: ServerResponse, hooks: AdminHooks = {}): Promise<void> {
-  if (!checkAdminAuth(req, res)) return;
+  const admin = await authenticateAdmin(req, res);
+  if (!admin.ok) return;
 
   const pathname = new URL(req.url || "/", "http://x").pathname;
-  const match = pathname.match(/^\/admin\/tokens(?:\/(\d+))?$/);
+  const match = pathname.match(/^\/admin\/(tokens|assignments|me)(?:\/(\d+))?$/);
   if (!match) { sendJson(res, 404, { error: "Not found" }); return; }
-  const id = match[1] ? parseInt(match[1], 10) : null;
+  const id = match[2] ? Number.parseInt(match[2], 10) : null;
 
   const ip = getClientIp(req);
-  // Auth disabled → requests are unauthenticated, don't attribute them to the admin token
-  const tokenName = getAuthToken() ? "admin" : "anonymous";
-  log("info", "ADMIN", `token="${tokenName}" action="${req.method} ${pathname}" ip="${ip}"`);
+  const tokenName = admin.name;
+  logAdminCall(req, pathname, ip, admin);
 
   try {
-    const handler = adminHandler(req.method, id);
+    const handler = adminHandler(match[1], req.method, id);
     if (!handler) { sendJson(res, 405, { error: "Method Not Allowed" }); return; }
-    await handler(req, res, id as number, hooks);
+    await handler(req, res, id as number, hooks, admin);
   } catch (err) {
     const msg = (err as Error).message;
     log("error", "ADMIN", `token="${tokenName}" action="${req.method} ${pathname}" ip="${ip}" error=${JSON.stringify(msg)}`);
@@ -416,18 +558,24 @@ export async function handleAdminRequest(req: IncomingMessage, res: ServerRespon
   }
 }
 
-type AdminHandler = (req: IncomingMessage, res: ServerResponse, id: number, hooks: AdminHooks) => Promise<void> | void;
+type AdminHandler = (req: IncomingMessage, res: ServerResponse, id: number, hooks: AdminHooks,
+  admin: Extract<AdminAuth, { ok: true }>) => Promise<void> | void;
 
-/** GET/POST on /admin/tokens, PATCH/DELETE on /admin/tokens/:id. */
-function adminHandler(method: string | undefined, id: number | null): AdminHandler | null {
-  if (!id) {
-    if (method === "GET") return listTokens;
-    if (method === "POST") return createToken;
-    return null;
-  }
-  if (method === "PATCH") return updateToken;
-  if (method === "DELETE") return deleteToken;
-  return null;
+type RouteTable = Partial<Record<string, AdminHandler>>;
+
+/** Per resource: GET/POST on the collection, PATCH/DELETE on /admin/<resource>/:id. */
+function adminResources(): Record<string, { collection: RouteTable; item: RouteTable }> {
+  return {
+    tokens:      { collection: { GET: listTokens, POST: createToken }, item: { PATCH: updateToken, DELETE: deleteToken } },
+    assignments: { collection: { GET: listAssignments, POST: createAssignment }, item: { PATCH: updateAssignment, DELETE: deleteAssignment } },
+    me:          { collection: { GET: showMe }, item: {} },
+  };
+}
+
+function adminHandler(resource: string, method: string | undefined, id: number | null): AdminHandler | null {
+  const res = adminResources()[resource];
+  const routes = id ? res.item : res.collection;
+  return (method && Object.hasOwn(routes, method) ? routes[method] : undefined) ?? null;
 }
 
 // GET /admin/tokens – list all tokens (token_hash and secrets excluded)
@@ -516,4 +664,101 @@ function deleteToken(_req: IncomingMessage, res: ServerResponse, id: number, { o
   saveTokenStore(store);
   onDelete?.(deleted);
   sendJson(res, 200, { ok: true, id });
+}
+
+// ── Admin: OAuth assignments (/admin/assignments[/:id]) and /admin/me ────────
+/** Secrets of a connection are replaced by `<field>_set` flags (like for tokens). */
+function toSafeAssignment<T extends { connection?: OraConnection | null }>(e: T): T {
+  if (!e.connection) return e;
+  const conn: Record<string, unknown> = { ...e.connection };
+  for (const f of SECRET_FIELDS) {
+    if (conn[f]) { delete conn[f]; conn[`${f}_set`] = true; }
+  }
+  return { ...e, connection: conn as OraConnection };
+}
+
+// GET /admin/assignments – env assignments (read-only) followed by the stored ones; secrets never leave the server
+function listAssignments(_req: IncomingMessage, res: ServerResponse): void {
+  const stored = (loadTokenStore().assignments ?? []).map(a => ({ ...toSafeAssignment(a), source: "store" }));
+  sendJson(res, 200, { assignments: [...envAssignments().map(toSafeAssignment), ...stored] });
+}
+
+/** Picks the known assignment fields out of a request body. */
+const pickAssignment = (body: Record<string, unknown>): Partial<Assignment> =>
+  Object.fromEntries(ASSIGNMENT_FIELDS.filter(k => body[k] !== undefined).map(k => [k, body[k]]));
+
+/** Validation shared by POST and PATCH; returns an error message or null. */
+function assignmentBodyError(body: Record<string, unknown>, partial: boolean): string | null {
+  return assignmentError(body, { partial })
+    ?? (parseClientConnectionMode(body.client_connection) ? null : CLIENT_MODE_ERROR)
+    ?? validateConnection(body.connection);
+}
+
+// POST /admin/assignments – { group | user, connection, client_connection, admin, note }
+async function createAssignment(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = JSON.parse((await readBody(req)) || "{}");
+  const error = assignmentBodyError(body, false);
+  if (error) { sendJson(res, 400, { error }); return; }
+  const store = loadTokenStore();
+  const entry: StoredAssignment = {
+    ...pickAssignment(body),
+    id: store.next_assignment_id ?? 1,
+    connection: cleanConnection(body.connection),
+    created_at: new Date().toISOString(),
+  };
+  if (entry.client_connection === "none") delete entry.client_connection;
+  store.next_assignment_id = entry.id + 1;
+  store.assignments = [...(store.assignments ?? []), entry];
+  saveTokenStore(store);
+  sendJson(res, 201, { ...toSafeAssignment(entry), source: "store" });
+}
+
+// PATCH /admin/assignments/:id – change connection, client_connection, admin, note (not group/user: delete and re-create)
+async function updateAssignment(req: IncomingMessage, res: ServerResponse, id: number, { onUpdate }: AdminHooks): Promise<void> {
+  const updates = JSON.parse((await readBody(req)) || "{}");
+  if (updates.group !== undefined || updates.user !== undefined) {
+    sendJson(res, 400, { error: '"group" and "user" cannot be changed' });
+    return;
+  }
+  const error = assignmentBodyError(updates, true);
+  if (error) { sendJson(res, 400, { error }); return; }
+  const store = loadTokenStore();
+  const entry = (store.assignments ?? []).find(a => a.id === id);
+  if (!entry) { sendJson(res, 404, { error: "Not found" }); return; }
+  const before = { ...entry };
+  Object.assign(entry, pickAssignment(updates));
+  if (updates.connection !== undefined) {
+    entry.connection = cleanConnection(mergeSecrets(updates.connection as OraConnection | null, before.connection ?? null));
+  }
+  if (entry.client_connection === "none") delete entry.client_connection;
+  saveTokenStore(store);
+  onUpdate?.(before, entry);
+  sendJson(res, 200, { ...toSafeAssignment(entry), source: "store" });
+}
+
+// DELETE /admin/assignments/:id
+function deleteAssignment(_req: IncomingMessage, res: ServerResponse, id: number, { onDelete }: AdminHooks): void {
+  const store = loadTokenStore();
+  const list = store.assignments ?? [];
+  const idx = list.findIndex(a => a.id === id);
+  if (idx === -1) { sendJson(res, 404, { error: "Not found" }); return; }
+  const [deleted] = list.splice(idx, 1);
+  store.assignments = list;
+  saveTokenStore(store);
+  onDelete?.(deleted);
+  sendJson(res, 200, { ok: true, id });
+}
+
+// GET /admin/me – who is calling and how the server is secured (for the admin UI)
+function showMe(_req: IncomingMessage, res: ServerResponse, _id: number, _hooks: AdminHooks,
+  admin: Extract<AdminAuth, { ok: true }>): void {
+  const oauth = getOAuthConfig();
+  sendJson(res, 200, {
+    name: admin.name, method: admin.method,
+    email: admin.identity?.email ?? null, user_name: admin.identity?.name ?? null,
+    oauth: oauth && {
+      issuer: oauth.issuer, groups_claim: oauth.groupsClaim, audience: oauth.audience,
+      session_ttl: oauth.sessionTtl,
+    },
+  });
 }

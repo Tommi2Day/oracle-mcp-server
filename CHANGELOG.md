@@ -5,6 +5,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **OAuth 2.0 / OpenID Connect** as an alternative to bearer tokens, primarily for Microsoft Entra ID (any OIDC provider
+  works): `OAUTH_ISSUER` switches it on. MCP clients send an access token (JWT: signature via JWKS, issuer, audience,
+  lifetime are validated locally); the admin UI offers single sign-on (authorization code flow with PKCE, `HttpOnly`
+  session cookie, `X-Requested-With` header for changes). `AUTH_TOKEN` and file tokens keep working. See
+  [docs/oauth.md](docs/oauth.md)
+- **Assignments** (deny by default): group or e-mail (`*@domain`, or the immutable object id) → access, **default
+  Oracle connection**, `client_connection` mode and admin role. Configured by `OAUTH_ALLOWED_GROUPS`,
+  `OAUTH_ALLOWED_USERS`, `OAUTH_ADMIN_GROUPS`, `OAUTH_ADMIN_USERS`, `OAUTH_ASSIGNMENTS` (read-only) and in the admin UI
+  (*OAuth assignments*) / REST `/admin/assignments` (stored in the token store, `password` / `wallet_password`
+  encrypted like token secrets and never returned)
+- `GET /admin/me`, `GET /auth/status|login|callback`, `POST /auth/logout`,
+  `GET /.well-known/oauth-protected-resource` (RFC 9728; the `401` challenge carries `resource_metadata`)
+- Attribution: the user's e-mail replaces the token name in the `[MCP]` / `[SESSION]` / `[ADMIN]` log lines and in
+  `V$SESSION.CLIENT_IDENTIFIER`; new `[AUDIT]` log category (`login`, `logout`, `session_start`, changing admin calls)
+  and `[AUTH]` `reason="oauth: …"`. Documented in `docs/logging.md`, Logstash pipeline updated
+- Helm: `oauth.*` values; OpenAPI: assignment and auth endpoints; `docker-compose.yml` passes the `OAUTH_*` variables
+- Docker integration tests (skipped unless their environment variable is set; `npm run test:integration`, CI job
+  `integration`): `tests/oracle.integration.test.ts` runs every MCP tool against a real Oracle Free database
+  (`oracle-test` container) and the whole OAuth path over HTTP (group / e-mail → schema, `V$SESSION` tags,
+  client-supplied credentials enforced by Oracle, assignment admin API); `tests/oidc.integration.test.ts` validates
+  tokens and the browser login against a real provider (`docker compose --profile oidc up -d oidc-test`,
+  mock-oauth2-server)
+- `OAUTH_RESOURCE_SCOPES`: scopes advertised to MCP clients in `/.well-known/oauth-protected-resource` (default
+  `<audience>/.default` as before, right for Entra ID; e.g. `openid profile email` for Keycloak). Compose and Helm
+  (`oauth.resourceScopes`) pass it through. New docs section "MCP clients" (static header vs. client-side login,
+  client registration / dynamic registration, audience, scopes, `claude mcp add --client-id`), `example.mcp.json`
+  and README client examples
+- Keycloak as a real test and demo identity provider: compose profile `keycloak` (`docker compose --profile keycloak up -d
+  --wait keycloak`, console on port 8081) with the realm `tests/oidc/keycloak-realm.json` (users, groups, audience and
+  groups mappers, browser, password-grant and pre-registered MCP-client (`oramcp-mcp-client`, authorization code + PKCE) clients) and `examples/oauth-keycloak.env` for the full stack with SSO
+  login in the admin UI. `tests/oidc.integration.test.ts` runs against the mock server or Keycloak (real login form);
+  CI runs both. `docker-compose.yml` passes `OAUTH_JWKS_URI`, `OAUTH_AUTHORIZATION_ENDPOINT`, `OAUTH_TOKEN_ENDPOINT`
+- Unit tests `tests/oauth.test.ts` and `tests/oauth-auth.test.ts` with a fake identity provider
+- Skills are tested: `tests/skills.test.ts` checks that every parameter and value a `SKILL.md` names exists in the tool
+  schemas and that every tool is covered by a skill; `tests/skills.integration.test.ts` (`ORA_TEST_HOST`) runs the SQL
+  blocks and the workflows on a real database — a real blocking chain for `locks`, a slow statement through `top_sql` /
+  `sql_plan` / `explain_plan` and the index fix, schema documentation, and a real deadlock followed from `alert_log`
+  through `trace_files` to `trace_content`
+
+### Changed
+
+- `/info` accepts the same admin authentication as `/admin/*` (also OAuth admins)
+
+### Security
+
+- With OAuth configured, an empty `AUTH_TOKEN` does not disable authentication
+- E-mail matching ignores an e-mail the provider marks `email_verified: false`; `OAUTH_REQUIRE_VERIFIED_EMAIL`
+  demands `true`
+
 ## [1.0.0] - 2026-11-07
 
 First complete version. From here on the MCP tools and their parameters, the admin REST API (`openapi.json`), the

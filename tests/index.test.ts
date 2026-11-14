@@ -50,7 +50,9 @@ vi.mock("../src/lib.js", async () => ({
   readFileEnv: vi.fn(),
   getAuthToken: vi.fn(() => ""),
   checkAuth: vi.fn().mockResolvedValue({ ok: true, name: "admin", connection: null, clientConnection: "none" }),
-  checkAdminAuth: vi.fn(() => true),
+  authenticateAdmin: vi.fn(async () => ({ ok: true, name: "admin", method: "token" })),
+  allAssignments: vi.fn(() => []),
+  audit: vi.fn(),
   handleAdminRequest: vi.fn().mockResolvedValue(undefined),
   migrateTokenStore: vi.fn(),
   loadTokenStore: vi.fn(() => ({ tokens: [], next_id: 1 })),
@@ -64,7 +66,7 @@ import {
   handleRequest, createMcpServer, getPool, poolCache, sessions, closeAllPools,
   toIdentifier, isReadOnlyStatement, formatCell, formatOracleType, featuresFor,
 } from "../src/index.js";
-import { checkAuth, handleAdminRequest, log } from "../src/lib.js";
+import { checkAuth, authenticateAdmin, audit, handleAdminRequest, log } from "../src/lib.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 async function callTool(name: string, args: Record<string, unknown> = {}) {
@@ -400,6 +402,53 @@ describe("handleRequest", () => {
     mockTransport.handleRequest.mockClear();
     await handleRequest(makeReq("POST", "/mcp"), makeRes());
     expect(mockTransport.handleRequest).toHaveBeenCalledTimes(1);
+  });
+
+  describe("OAuth", () => {
+    it.each(["/admin/assignments", "/admin/assignments/3", "/admin/me"])("%s delegates to handleAdminRequest", async (url) => {
+      vi.mocked(handleAdminRequest).mockClear();
+      const req = makeReq("GET", url);
+      await handleRequest(req, makeRes());
+      expect(vi.mocked(handleAdminRequest)).toHaveBeenCalledWith(req, expect.anything(), expect.any(Object));
+    });
+
+    it("answers /auth/status (OAuth off) and hides the protected resource metadata", async () => {
+      const status = makeRes();
+      await handleRequest(makeReq("GET", "/auth/status"), status);
+      expect(resBody(status)).toEqual({ enabled: false });
+      const meta = makeRes();
+      await handleRequest(makeReq("GET", "/.well-known/oauth-protected-resource"), meta);
+      expect(meta.writeHead).toHaveBeenCalledWith(404, expect.any(Object));
+    });
+
+    it("/info needs admin authentication", async () => {
+      vi.mocked(authenticateAdmin).mockResolvedValueOnce({ ok: false });
+      const res = makeRes();
+      await handleRequest(makeReq("GET", "/info"), res);
+      expect(res.end).not.toHaveBeenCalled();
+    });
+
+    it("audits the start of a session of an OAuth user", async () => {
+      vi.mocked(audit).mockClear();
+      vi.mocked(checkAuth).mockResolvedValueOnce({
+        ok: true, name: "alice@example.com", connection: null, clientConnection: "none",
+        identity: { sub: "oid-alice", email: "alice@example.com", name: "Alice", assignment: "3", admin: false },
+      });
+      await handleRequest(makeReq("POST", "/mcp"), makeRes());
+      const opts = vi.mocked(StreamableHTTPServerTransport).mock.calls.at(-1)![0] as any;
+      opts.onsessioninitialized("oauth-s1");
+      expect(vi.mocked(audit)).toHaveBeenCalledWith(expect.objectContaining({
+        user: "alice@example.com", sub: "oid-alice", action: "session_start", session: "oauth-s1", via: "oauth", assignment: "3", admin: false,
+      }));
+      expect(vi.mocked(log)).toHaveBeenCalledWith("info", "SESSION", expect.stringContaining('token="alice@example.com" action="start"'));
+    });
+
+    it("does not audit sessions of bearer tokens", async () => {
+      vi.mocked(audit).mockClear();
+      await handleRequest(makeReq("POST", "/mcp"), makeRes());
+      (vi.mocked(StreamableHTTPServerTransport).mock.calls.at(-1)![0] as any).onsessioninitialized("plain-s1");
+      expect(vi.mocked(audit)).not.toHaveBeenCalled();
+    });
   });
 
   describe("client-supplied connection (X-Oracle-* headers)", () => {
