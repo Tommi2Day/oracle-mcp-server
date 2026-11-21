@@ -16,6 +16,9 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  IMAGE: tommi2day/oracle-mcp-server
+  # ghcr.io names must be lower case, so the owner is not taken from github.repository_owner
+  GHCR_IMAGE: ghcr.io/tommi2day/oracle-mcp-server
 
 jobs:
   bump-version:
@@ -102,6 +105,9 @@ jobs:
     name: Build & Push
     runs-on: ubuntu-latest
     needs: lint-and-test
+    permissions:
+      contents: read
+      packages: write   # push to ghcr.io with GITHUB_TOKEN
     # bump-version is skipped on tag push; without an explicit status check the
     # implicit success() would skip this job because of that skipped ancestor.
     if: always() && !failure() && !cancelled()
@@ -114,17 +120,45 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      # Scan before anything is pushed: a vulnerable image must not become :latest.
+      # Runs before the registry login so the third-party scan action never sees Docker Hub credentials.
+      - name: Build image for scanning
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: oracle-mcp-server:scan
+          cache-from: type=gha
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: oracle-mcp-server:scan
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: tommi2day/oracle-mcp-server
+          images: |
+            ${{ env.IMAGE }}
+            ${{ env.GHCR_IMAGE }}
           tags: |
             # git tag or release → :1.2.3  :1.2  :1  :latest
             type=semver,pattern={{version}}
@@ -137,6 +171,7 @@ jobs:
             type=sha,format=short
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -151,7 +186,9 @@ jobs:
         id: meta-thick
         uses: docker/metadata-action@v6
         with:
-          images: tommi2day/oracle-mcp-server
+          images: |
+            ${{ env.IMAGE }}
+            ${{ env.GHCR_IMAGE }}
           flavor: |
             suffix=-thick,onlatest=true
           tags: |
@@ -163,6 +200,7 @@ jobs:
             type=sha,format=short
 
       - name: Build and push (thick)
+        id: build-thick
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -173,6 +211,44 @@ jobs:
           labels: ${{ steps.meta-thick.outputs.labels }}
           cache-from: type=gha,scope=thick
           cache-to: type=gha,mode=max,scope=thick
+
+      # GitHub has no API to change a package's visibility: a new ghcr.io package starts private and is made public once
+      # (profile -> Packages -> oracle-mcp-server -> Package settings -> Change visibility). This step fails until that is done.
+      - name: Verify the GHCR image is public
+        run: |
+          repo="${GHCR_IMAGE#ghcr.io/}"
+          tag=$(echo "${{ steps.meta.outputs.version }}" | head -n1)
+          token=$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token || true)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json' \
+            "https://ghcr.io/v2/${repo}/manifests/${tag}")
+          if [ "$code" != "200" ]; then
+            echo "::error::${GHCR_IMAGE}:${tag} is not publicly pullable (HTTP ${code}). Make the package public: https://github.com/users/${GITHUB_REPOSITORY_OWNER}/packages/container/oracle-mcp-server/settings"
+            exit 1
+          fi
+          echo "${GHCR_IMAGE}:${tag} is public"
+
+      - name: Job summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          TAGS_THICK: ${{ steps.meta-thick.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST_THICK: ${{ steps.build-thick.outputs.digest }}
+        run: |
+          {
+            echo "### Container images"
+            echo
+            printf 'Digest: `%s` (thin), `%s` (thick)\n\n' "$DIGEST" "$DIGEST_THICK"
+            echo "| Registry | Reference |"
+            echo "| --- | --- |"
+            while read -r ref; do
+              [ -n "$ref" ] || continue
+              case "$ref" in ghcr.io/*) reg="GitHub Container Registry" ;; *) reg="Docker Hub" ;; esac
+              printf '| %s | `%s` |\n' "$reg" "$ref"
+            done <<< "$TAGS"$'\n'"$TAGS_THICK"
+            echo
+            echo "GHCR package is public (verified with an anonymous pull): https://github.com/${GITHUB_REPOSITORY_OWNER}?tab=packages&repo_name=${GITHUB_REPOSITORY#*/}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   helm:
     name: Publish Helm chart
