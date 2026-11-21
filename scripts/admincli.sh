@@ -10,14 +10,15 @@
 #   ./admincli.sh whoami                        # who am I, how is the server secured
 #   ./admincli.sh list-assignments              # OAuth assignments (group/user -> connection)
 #   ./admincli.sh show-assignment   <id>
-#   ./admincli.sh add-assignment    --group G | --email E [connection options] [--admin] [--client-connection M] [--note T]
+#   ./admincli.sh add-assignment    --group G | --email E [connection options] [--admin] [--read-only] [--client-connection M] [--note T]
 #   ./admincli.sh delete-assignment <id>
 #   ./admincli.sh set-assignment-conn <id> '<json>' | clear-assignment-conn <id>
 #   ./admincli.sh set-assignment-client-conn <id> none|credentials|full
 #   ./admincli.sh set-assignment-admin <id> true|false
+#   ./admincli.sh set-assignment-read-only <id> true|false   # no execute tool
 #   ./admincli.sh list-tokens
 #   ./admincli.sh show-token    <id>
-#   ./admincli.sh add-token    <name>
+#   ./admincli.sh add-token    <name> [--read-only]
 #   ./admincli.sh delete-token <id>
 #   ./admincli.sh enable-token  <id>
 #   ./admincli.sh disable-token <id>
@@ -25,6 +26,7 @@
 #   ./admincli.sh set-conn     <id> '<json>'   # set per-token DB connection
 #   ./admincli.sh clear-conn   <id>            # reset to default admin connection
 #   ./admincli.sh set-client-conn <id> none|credentials|full   # client may send X-Oracle-* headers
+#   ./admincli.sh set-read-only <id> true|false                # token without the execute tool
 #   ./admincli.sh health                        # server health check
 set -eo pipefail
 
@@ -99,15 +101,16 @@ cmd_list_tokens() {
 
   echo ""
   if _py3; then
-    printf "%-5s %-30s %-8s %-6s %-24s %-24s\n" "ID" "NAME" "ACTIVE" "CONN" "CREATED" "LAST USED"
-    printf "%-5s %-30s %-8s %-6s %-24s %-24s\n" "-----" "------------------------------" "--------" "------" "------------------------" "------------------------"
+    printf "%-5s %-30s %-8s %-6s %-4s %-24s %-24s\n" "ID" "NAME" "ACTIVE" "CONN" "RO" "CREATED" "LAST USED"
+    printf "%-5s %-30s %-8s %-6s %-4s %-24s %-24s\n" "-----" "------------------------------" "--------" "------" "----" "------------------------" "------------------------"
     python3 - "$body" <<'PYEOF'
 import sys, json
 tokens = json.loads(sys.argv[1]).get("tokens", [])
 for t in tokens:
     conn = "yes" if t.get("connection") else "-"
     last = (t.get("last_used_at") or "-")[:19]
-    print(f"{t['id']:<5} {t['name']:<30} {str(t['active']).lower():<8} {conn:<6} {t['created_at'][:19]:<24} {last:<24}")
+    ro = "yes" if t.get("read_only") else "-"
+    print(f"{t['id']:<5} {t['name']:<30} {str(t['active']).lower():<8} {conn:<6} {ro:<4} {t['created_at'][:19]:<24} {last:<24}")
 PYEOF
   else
     printf "%-5s %-30s %-8s %-24s %-24s\n" "ID" "NAME" "ACTIVE" "CREATED" "LAST USED"
@@ -150,6 +153,7 @@ print(f"  Name       : {t['name']}")
 print(f"  Active     : {t['active']}")
 print(f"  Created    : {t['created_at']}")
 print(f"  Last used  : {t.get('last_used_at') or '-'}")
+print(f"  Read-only  : {str(bool(t.get('read_only'))).lower()}")
 conn = t.get("connection")
 if conn:
     if conn.get("tns_alias"):
@@ -212,7 +216,7 @@ parse_conn_opts() {
   o_protocol="${ORA_PROTOCOL:-}"; o_alias="${ORA_TNS_ALIAS:-}"; o_cs="${ORA_CONNECT_STRING:-}"
   o_user="${ORA_USER:-}"; o_pass="${ORA_PASSWORD:-}"
   o_tnsadmin=""; o_wallet=""; o_walletpw=""; o_diag=""; o_tuning=""; o_client=""
-  o_group=""; o_email=""; o_admin=""; o_note=""
+  o_group=""; o_email=""; o_admin=""; o_note=""; o_readonly=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --host)            o_host="${2:?--host needs a value}";     shift 2 ;;
@@ -230,6 +234,7 @@ parse_conn_opts() {
       --diagnostics-pack) o_diag="${2:?--diagnostics-pack needs a value}"; shift 2 ;;
       --tuning-pack)     o_tuning="${2:?--tuning-pack needs a value}"; shift 2 ;;
       --client-connection) o_client="${2:?--client-connection needs a value}"; shift 2 ;;
+      --read-only)       o_readonly=true; shift ;;
       --group)  [ "$mode" = assignment ] || die "Unknown option: $1"; o_group="${2:?--group needs a value}"; shift 2 ;;
       --email)  [ "$mode" = assignment ] || die "Unknown option: $1"; o_email="${2:?--email needs a value}"; shift 2 ;;
       --note)   [ "$mode" = assignment ] || die "Unknown option: $1"; o_note="${2:?--note needs a value}"; shift 2 ;;
@@ -289,9 +294,11 @@ cmd_add_token() {
   local conn_json="$CONN_JSON" target="$CONN_TARGET" user="$o_user" client="$o_client"
   build_client_json "$client"
   local client_json="$CLIENT_JSON"
+  local ro_json=""
+  [ -z "$o_readonly" ] || ro_json=',"read_only":true'
 
   local raw body
-  raw=$(api POST "$API" -d "{\"name\":$(json_str "$name")${conn_json}${client_json}}")
+  raw=$(api POST "$API" -d "{\"name\":$(json_str "$name")${conn_json}${client_json}${ro_json}}")
   body=$(check_response "$raw")
 
   local token
@@ -315,6 +322,10 @@ cmd_add_token() {
   fi
   if [ -n "$client" ] && [ "$client" != "none" ]; then
     echo "   Client-supplied connection: ${client} (X-Oracle-* headers)"
+    echo ""
+  fi
+  if [ -n "$o_readonly" ]; then
+    echo "   Read-only: the execute tool is disabled for this token"
     echo ""
   fi
 }
@@ -403,6 +414,17 @@ cmd_set_client_conn() {
   echo "✅ Token ${id}: client-supplied connection = ${mode}."
 }
 
+cmd_set_read_only() {
+  require_token
+  [ -n "${1:-}" ] || die "Usage: ./admincli.sh set-read-only <id> true|false"
+  case "${2:-}" in
+    true|false) ;;
+    *) die "Usage: ./admincli.sh set-read-only <id> true|false" ;;
+  esac
+  check_response "$(api PATCH "${API}/${1}" -d "{\"read_only\":${2}}")" >/dev/null
+  echo "✅ Token ${1}: read-only = ${2} (open sessions follow with their next request)."
+}
+
 # ── OAuth assignments (group / user → connection) ─────────────────────────────
 cmd_whoami() {
   require_token
@@ -438,9 +460,9 @@ cmd_list_assignments() {
   if _py3; then
     python3 - "$body" <<'PYEOF'
 import sys, json
-fmt = "{:<8} {:<6} {:<36} {:<6} {:<12} {:<9} {}"
-print(fmt.format("ID", "TYPE", "GROUP / USER", "ROLE", "SOURCE", "CLIENT", "CONNECTION"))
-print(fmt.format("-" * 8, "-" * 6, "-" * 36, "-" * 6, "-" * 12, "-" * 9, "-" * 30))
+fmt = "{:<8} {:<6} {:<36} {:<6} {:<4} {:<12} {:<9} {}"
+print(fmt.format("ID", "TYPE", "GROUP / USER", "ROLE", "RO", "SOURCE", "CLIENT", "CONNECTION"))
+print(fmt.format("-" * 8, "-" * 6, "-" * 36, "-" * 6, "-" * 4, "-" * 12, "-" * 9, "-" * 30))
 for a in json.loads(sys.argv[1]).get("assignments", []):
     kind = "group" if a.get("group") else "user"
     c = a.get("connection") or {}
@@ -448,7 +470,7 @@ for a in json.loads(sys.argv[1]).get("assignments", []):
     if c.get("user"):
         target += f" ({c['user']})"
     print(fmt.format(str(a.get("id")), kind, a.get("group") or a.get("user"), "admin" if a.get("admin") else "user",
-                     a.get("source", "-"), a.get("client_connection") or "none", target))
+                     "yes" if a.get("read_only") else "-", a.get("source", "-"), a.get("client_connection") or "none", target))
 PYEOF
   else
     echo "$body"
@@ -487,6 +509,7 @@ cmd_add_assignment() {
   if [ -n "$o_group" ]; then subject="\"group\":$(json_str "$o_group")"; else subject="\"user\":$(json_str "$o_email")"; fi
   local extra=""
   [ -z "$o_admin" ] || extra+=",\"admin\":true"
+  [ -z "$o_readonly" ] || extra+=",\"read_only\":true"
   [ -z "$o_note" ] || extra+=",\"note\":$(json_str "$o_note")"
 
   local raw body id
@@ -494,7 +517,7 @@ cmd_add_assignment() {
   body=$(check_response "$raw")
   id=$(echo "$body" | grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
   echo ""
-  echo "✅ Assignment created (ID: ${id}): ${o_group:+group }${o_group:-user }${o_email}${o_admin:+, admin}"
+  echo "✅ Assignment created (ID: ${id}): ${o_group:+group }${o_group:-user }${o_email}${o_admin:+, admin}${o_readonly:+, read-only}"
   [ -z "$CONN_JSON" ] || echo "   Connection: ${CONN_TARGET:-(server default target)} (user: ${o_user:-(default)})"
   [ -z "$o_client" ] || [ "$o_client" = none ] || echo "   Client-supplied connection: ${o_client} (X-Oracle-* headers)"
   echo ""
@@ -545,6 +568,17 @@ cmd_set_assignment_admin() {
   echo "✅ Assignment ${1}: admin = ${2}."
 }
 
+cmd_set_assignment_read_only() {
+  require_token
+  [ -n "${1:-}" ] || die "Usage: ./admincli.sh set-assignment-read-only <id> true|false"
+  case "${2:-}" in
+    true|false) ;;
+    *) die "Usage: ./admincli.sh set-assignment-read-only <id> true|false" ;;
+  esac
+  check_response "$(api PATCH "${ASSIGN_API}/${1}" -d "{\"read_only\":${2}}")" >/dev/null
+  echo "✅ Assignment ${1}: read-only = ${2} (open sessions follow with their next request)."
+}
+
 cmd_help() {
   cat <<EOF
 
@@ -567,6 +601,7 @@ oracle-mcp-server admin CLI
     add-assignment               Create an assignment; the same connection options as add-token plus:
                --group G | --email E     group name/id from the groups claim, or e-mail, object id or *@domain
                [--admin]                 may also use the admin UI and API
+               [--read-only]             the execute tool is disabled for the user
                [--note TEXT]
                [--client-connection none|credentials|full]
     delete-assignment <id>       Delete a stored assignment
@@ -574,6 +609,7 @@ oracle-mcp-server admin CLI
     clear-assignment-conn <id>   Back to the server default connection
     set-assignment-client-conn <id> none|credentials|full
     set-assignment-admin <id> true|false
+    set-assignment-read-only <id> true|false   Remove / restore the execute tool
 
   Token commands:
     list-tokens                  List all tokens
@@ -592,6 +628,7 @@ oracle-mcp-server admin CLI
                [--client-connection none|credentials|full]
                                       client may send its own user/password (credentials) or
                                       also the target (full) as X-Oracle-* headers (default: none)
+               [--read-only]          disable the execute tool (no INSERT/UPDATE/DELETE/DDL/PL-SQL)
     delete-token <id>            Permanently delete a token
     enable-token <id>            Re-enable a token
     disable-token <id>           Temporarily disable a token
@@ -601,6 +638,8 @@ oracle-mcp-server admin CLI
     clear-conn   <id>            Clear per-token connection (falls back to default connection)
     set-client-conn <id> none|credentials|full
                                  What the token's clients may set via X-Oracle-* headers
+    set-read-only <id> true|false
+                                 Remove / restore the execute tool of a token (also in open sessions)
 
   Examples:
     export AUTH_TOKEN=<admin-token>
@@ -628,6 +667,12 @@ oracle-mcp-server admin CLI
     ./admincli.sh add-token "analysts" --client-connection credentials
     ./admincli.sh set-client-conn 2 full
 
+    # Tokens and assignments without the execute tool
+    ./admincli.sh add-token "reporting" --read-only
+    ./admincli.sh set-read-only 2 true
+    ./admincli.sh add-assignment --group grp-reporting --read-only
+    ./admincli.sh set-assignment-read-only 1 false
+
     # OAuth: everybody in the group grp-dba uses the PROD_HIGH alias, alice may bring her own account
     ./admincli.sh add-assignment --group grp-dba --tns-alias PROD_HIGH --user mcp_dba --password secret
     ./admincli.sh add-assignment --email alice@example.com --client-connection credentials
@@ -650,6 +695,7 @@ case "${1:-help}" in
   set-conn)      cmd_set_conn      "${2:-}" "${3:-}" ;;
   clear-conn)    cmd_clear_conn    "${2:-}" ;;
   set-client-conn) cmd_set_client_conn "${2:-}" "${3:-}" ;;
+  set-read-only)   cmd_set_read_only   "${2:-}" "${3:-}" ;;
   whoami)        cmd_whoami ;;
   list-assignments)  cmd_list_assignments ;;
   show-assignment)   cmd_show_assignment   "${2:-}" ;;
@@ -659,6 +705,7 @@ case "${1:-help}" in
   clear-assignment-conn)      cmd_clear_assignment_conn      "${2:-}" ;;
   set-assignment-client-conn) cmd_set_assignment_client_conn "${2:-}" "${3:-}" ;;
   set-assignment-admin)       cmd_set_assignment_admin       "${2:-}" "${3:-}" ;;
+  set-assignment-read-only)   cmd_set_assignment_read_only   "${2:-}" "${3:-}" ;;
   health)        cmd_health ;;
   help|--help|-h) cmd_help ;;
   *) die "Unknown command: ${1}\nHelp: ./admincli.sh help" ;;

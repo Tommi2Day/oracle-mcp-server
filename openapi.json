@@ -159,6 +159,10 @@
           },
           "client_connection": {
             "$ref": "#/components/schemas/ClientConnectionMode"
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Disables the execute tool (no INSERT/UPDATE/DELETE/DDL/PL-SQL); with several matching assignments the most restrictive wins."
           }
         }
       },
@@ -222,6 +226,10 @@
               "env",
               "store"
             ]
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Disables the execute tool (no INSERT/UPDATE/DELETE/DDL/PL-SQL); with several matching assignments the most restrictive wins."
           }
         }
       }
@@ -544,6 +552,10 @@
                   },
                   "client_connection": {
                     "$ref": "#/components/schemas/ClientConnectionMode"
+                  },
+                  "read_only": {
+                    "type": "boolean",
+                    "description": "Disables the execute tool (no INSERT/UPDATE/DELETE/DDL/PL-SQL); with several matching assignments the most restrictive wins."
                   }
                 },
                 "required": [
@@ -616,7 +628,7 @@
       ],
       "patch": {
         "summary": "Update a token",
-        "description": "Updates one or more of name, active, connection or client_connection. At least one field must be provided. Set connection to null to clear a custom connection and fall back to the server default.",
+        "description": "Updates one or more of name, active, connection, client_connection or read_only. At least one field must be provided. Set connection to null to clear a custom connection and fall back to the server default.",
         "operationId": "updateToken",
         "security": [
           {
@@ -652,6 +664,10 @@
                   },
                   "client_connection": {
                     "$ref": "#/components/schemas/ClientConnectionMode"
+                  },
+                  "read_only": {
+                    "type": "boolean",
+                    "description": "Disables the execute tool (no INSERT/UPDATE/DELETE/DDL/PL-SQL); with several matching assignments the most restrictive wins."
                   }
                 }
               },
@@ -958,7 +974,7 @@
       ],
       "patch": {
         "summary": "Update an OAuth assignment",
-        "description": "connection, client_connection, admin. group/user cannot be changed.",
+        "description": "connection, client_connection, admin, read_only. group/user cannot be changed.",
         "operationId": "updateAssignment",
         "security": [
           {

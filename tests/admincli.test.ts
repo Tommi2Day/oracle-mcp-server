@@ -155,6 +155,23 @@ describe.skipIf(!haveTools)("admincli.sh assignments", () => {
     expect((await cli(["set-assignment-admin", "1", "maybe"])).code).not.toBe(0);
   });
 
+  it("read-only: add-token/add-assignment flags and the set-* commands", async () => {
+    expect((await cli(["add-token", "ro", "--read-only"])).code).toBe(0);
+    expect(lastBody()).toEqual({ name: "ro", read_only: true });
+    expect((await cli(["add-assignment", "--group", "g", "--read-only"])).code).toBe(0);
+    expect(lastBody()).toEqual({ group: "g", read_only: true });
+
+    await cli(["set-read-only", "3", "true"]);
+    expect(seen[0]).toMatchObject({ method: "PATCH", url: "/admin/tokens/3" });
+    expect(lastBody()).toEqual({ read_only: true });
+    await cli(["set-assignment-read-only", "1", "false"]);
+    expect(seen[0]).toMatchObject({ method: "PATCH", url: "/admin/assignments/1" });
+    expect(lastBody()).toEqual({ read_only: false });
+
+    expect((await cli(["set-read-only", "3", "maybe"])).code).not.toBe(0);
+    expect((await cli(["set-assignment-read-only", "1"])).code).not.toBe(0);
+  });
+
   it("reports API errors", async () => {
     const r = await cli(["delete-assignment", "9"]);
     expect(r.code).not.toBe(0);
