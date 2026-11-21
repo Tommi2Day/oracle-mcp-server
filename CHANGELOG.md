@@ -5,6 +5,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Security hardening, ported from pg-mcp-server 1.2.0. **Read "Changed" before upgrading:** an HTTP server without
+`AUTH_TOKEN`/OAuth no longer starts.
+
+### Added
+- **Read-only tokens and assignments:** `read_only` flag on file tokens and OAuth assignments, and `ORA_READ_ONLY=true`
+  for everyone. The `execute` tool is hidden and refused (`[AUTH] … reason="read-only"`); `query` was already read-only.
+  A change applies to open sessions with their next request; a user matching several assignments is read-only if any
+  of them is. Admin UI toggle and list marker, REST API and OpenAPI spec, `admincli.sh`: `--read-only` for `add-token` /
+  `add-assignment`, `set-read-only`, `set-assignment-read-only`, an `RO` column and `Read-only` in `show-token`
+- **Failed-login throttle** per client IP: HTTP 429 with `Retry-After` after `AUTH_MAX_FAILURES` (default 20, `0` = off)
+  failures within `AUTH_FAILURE_WINDOW` seconds (default 60)
+- `ALLOW_ANONYMOUS` (Helm: `auth.allowAnonymous`) and Helm `server.readOnly` (`ORA_READ_ONLY`)
+- **Docker image scan:** CI job `image-scan` and a gate before the push in `release.yml` run Trivy and fail on fixable
+  HIGH/CRITICAL vulnerabilities, secrets or Dockerfile misconfigurations
+- The Docker images (thin and `-thick`) are also published to GitHub Container Registry
+  (`ghcr.io/tommi2day/oracle-mcp-server`, same tags as on Docker Hub); the release job verifies that the GHCR
+  package is publicly pullable and writes a job summary
+
+### Changed
+- License is Apache-2.0 (was MIT): `LICENSE`, `package.json`, `package-lock.json`, `openapi.json` and the README say so. Releases up to 1.1.0 were published under MIT
+- **Breaking:** `TRANSPORT=http` exits at startup without `AUTH_TOKEN` or `OAUTH_ISSUER` unless `ALLOW_ANONYMOUS=true`
+  is set — an unauthenticated server exposes the database and the admin API. Docker: pass `-e AUTH_TOKEN=…`;
+  `docker-compose.yml` passes the variables through; Helm: set `auth.token`, `auth.existingSecret` or
+  `auth.allowAnonymous`. The stdio transport is unaffected
+- `STORE_ENCRYPTION_KEY` is stretched with scrypt (`enc:v2:`). Existing `enc:v1:` values are still read and
+  re-encrypted at startup — after that, older versions can no longer read the token store
+- The token store file is chmod'ed to `0600` on every write
+- The admin page is served with `Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer` and `Cache-Control: no-store`
+
+### Security
+- MCP sessions are bound to the principal that opened them: resuming an `mcp-session-id` with another token or user is
+  answered with 403 (`reason="session belongs to another principal"`)
+- Pending OAuth logins (`/auth/login`, unauthenticated) are capped; an oversized request body closes the connection
+
 ## [1.1.0] - 2026-11-14
 
 Single sign-on: users can authenticate with an OpenID Connect provider (Microsoft Entra ID, Keycloak, …) instead of

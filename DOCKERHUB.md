@@ -8,7 +8,9 @@ Gives AI tools (Claude, Copilot, Cursor and other MCP clients) SQL access to any
 several people or AI clients share Oracle access through **one central service**: revocable tokens or your
 company's single sign-on (Entra ID, Keycloak, …) instead of database passwords in every client config, group-based
 access to different databases, TCPS wallets kept on the server, and an audit trail that names the person in both the
-log and `V$SESSION` (`CLIENT_IDENTIFIER` = token name or the user's e-mail). For a single developer working locally,
+log and `V$SESSION` (`CLIENT_IDENTIFIER` = token name or the user's e-mail). Tokens and SSO groups can be made
+**read-only** (the `execute` tool is removed), and the server is hardened for shared use: no start without
+authentication, failed-login throttle, sessions bound to their owner, Trivy-scanned image. For a single developer working locally,
 Oracle's SQLcl MCP server (`sql -mcp`) needs no extra service
 ([comparison](https://github.com/Tommi2Day/oracle-mcp-server#when-to-choose-this-server)).
 
@@ -35,6 +37,9 @@ docker run -d -p 3000:3000 \
   -v oracle-mcp-data:/data \
   tommi2day/oracle-mcp-server
 ```
+
+The image (and the `-thick` variant) is also published to the GitHub Container Registry with the same tags:
+`docker pull ghcr.io/tommi2day/oracle-mcp-server:latest`.
 
 `/opt/oracle/network/admin` (= `TNS_ADMIN`) takes `tnsnames.ora`, `sqlnet.ora` (thick mode),
 `ewallet.pem` (thin mode wallet or trusted CA certificates) and `cwallet.sso` (thick mode).
@@ -118,9 +123,12 @@ token store; the value here is the server default.
 |----------|---------|-------------|
 | `TRANSPORT` | `stdio` (image: `http`) | `stdio`: one client over stdin/stdout (Claude Desktop, local CLI). `http`: Streamable HTTP server for many clients, with auth, admin UI and `/health` |
 | `PORT` | `3000` | Listen port of the HTTP(S) server (`TRANSPORT=http`) |
-| `AUTH_TOKEN` | – | Admin bearer token: full access to `/mcp`, `/admin` and `/info`, uses the server default connection. If empty **and** no token file / OAuth is configured there is no authentication (development only) |
+| `AUTH_TOKEN` | – | Admin bearer token: full access to `/mcp`, `/admin` and `/info`, uses the server default connection. If empty and no `OAUTH_ISSUER` is set, the HTTP server **refuses to start** unless `ALLOW_ANONYMOUS=true` |
 | `TOKENS_FILE` | `./tokens.json` (image: `/data/tokens.json`) | JSON token store (tokens, per-token connections, OAuth assignments); created on first write, mount a volume to keep it |
-| `STORE_ENCRYPTION_KEY` | – | Passphrase; encrypts `password` / `wallet_password` in the token store with AES-256-GCM. Without it secrets are stored in clear text; changing it makes existing secrets unreadable |
+| `STORE_ENCRYPTION_KEY` | – | Passphrase; encrypts `password` / `wallet_password` in the token store with AES-256-GCM. Without it secrets are stored in clear text; changing it makes existing secrets unreadable. The key is derived with scrypt (`enc:v2:`): use a long random value; `enc:v1:` values of older versions are migrated at startup |
+| `ALLOW_ANONYMOUS` | – | `true` lets `TRANSPORT=http` start without `AUTH_TOKEN`/OAuth (development only) |
+| `ORA_READ_ONLY` | – | `true` disables the `execute` tool for all clients; tokens and OAuth assignments have a `read_only` flag of their own |
+| `AUTH_MAX_FAILURES` / `AUTH_FAILURE_WINDOW` | `20` / `60` | Failed authentications per client IP and window (seconds) before HTTP 429; `0` disables |
 | `MCP_SERVER_NAME` | `oracle-mcp-server` | Name announced to MCP clients, shown in the admin UI and written to `MODULE` in `V$SESSION` ([session identification](https://github.com/Tommi2Day/oracle-mcp-server#session-identification)) |
 | `ORA_CLIENT_CONNECTION` | `none` | `none` \| `credentials` \| `full`: connection parameters that clients of the `AUTH_TOKEN` (or anonymous access) may send as `X-Oracle-*` headers. Tokens and OAuth assignments have their own `client_connection` ([details](https://github.com/Tommi2Day/oracle-mcp-server#client-supplied-connections)) |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`; SQL text is only logged at `debug` ([logging](https://github.com/Tommi2Day/oracle-mcp-server/blob/main/docs/logging.md)) |
@@ -195,4 +203,4 @@ Full documentation: https://github.com/Tommi2Day/oracle-mcp-server#configuration
 
 ## License
 
-MIT — see https://github.com/Tommi2Day/oracle-mcp-server/blob/main/LICENSE
+Apache-2.0 — see https://github.com/Tommi2Day/oracle-mcp-server/blob/main/LICENSE

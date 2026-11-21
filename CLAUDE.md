@@ -71,6 +71,16 @@ Token field `client_connection` (`none`|`credentials`|`full`; admin/anonymous: `
 from clients, and never send token/default credentials to a client-chosen target. The permission is re-checked per
 request (`sessionClientConnections`); client pools are ref-counted (`clientPoolRefs`) and closed with the last session.
 
+### Read-only, session binding, throttle
+
+`read_only` (token/assignment field, `ORA_READ_ONLY` env) → `checkAuth` returns `readOnly`; `startSession` creates a
+`SessionState` shared with `createMcpServer` (hides and refuses `execute`) and `resumeSession` refreshes it on every
+request, so admin changes apply to open sessions. OAuth: the most restrictive matching assignment wins
+(`resolveAccess`). Sessions are bound to their opener (`sessionOwners`, `ownerOf`): another principal gets 403. Failed
+auth attempts are throttled per IP in `lib.ts` (`AUTH_MAX_FAILURES`/`AUTH_FAILURE_WINDOW`, 429). `TRANSPORT=http`
+refuses to start without auth unless `ALLOW_ANONYMOUS=true`. Store encryption is `enc:v2:` (scrypt); `enc:v1:` is still
+read and migrated. Keep the failing-closed behaviour: new tools that write must be hidden/refused when `readOnly`.
+
 ### Pools
 
 `getPool(connection)` returns a promise of an `oracledb.Pool`, cached by SHA-256 of `{attrs, caFile}` —

@@ -4,7 +4,7 @@
 [![codecov](https://codecov.io/gh/Tommi2Day/oracle-mcp-server/graph/badge.svg)](https://codecov.io/gh/Tommi2Day/oracle-mcp-server)
 [![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/tommi2day/oracle-mcp-server)](https://github.com/Tommi2Day/oracle-mcp-server/releases)
 [![Docker Pulls](https://img.shields.io/docker/pulls/tommi2day/oracle-mcp-server?logo=docker)](https://hub.docker.com/r/tommi2day/oracle-mcp-server)
-[![License: MIT](https://img.shields.io/github/license/tommi2day/oracle-mcp-server)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/github/license/tommi2day/oracle-mcp-server)](LICENSE)
 
 [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI tools (Claude, Copilot, Cursor and
 other MCP clients) access to **Oracle Database** — the Oracle sibling of
@@ -31,12 +31,19 @@ other MCP clients) access to **Oracle Database** — the Oracle sibling of
 - **Single sign-on:** optional **OAuth 2.0 / OpenID Connect** (Microsoft Entra ID, Keycloak, …) — MCP clients send
   an access token, the admin UI offers SSO, and **groups or e-mails choose the default database connection**
   (deny by default) — [details](#oauth-20--openid-connect)
+- **Read-only users:** `read_only` removes the `execute` tool for a token or an OAuth assignment (or `ORA_READ_ONLY` for
+  everyone), switched at runtime — [details](#read-only-tokens-and-assignments)
+- **Hardened by default:** the HTTP server refuses to start without authentication, sessions are bound to the client
+  that opened them, failed logins are throttled per IP (HTTP 429), the token store is `0600` with an scrypt-derived
+  key, the admin UI is served with CSP and no framing, and the Docker image is scanned with Trivy in CI —
+  [details](#security-hardening)
 - **Traceable in the database:** each session carries `MODULE`, `ACTION` = tool and `CLIENT_IDENTIFIER` = token
   name or, with SSO, the user's e-mail ([Session identification](#session-identification)); plus a structured audit log of tool calls, sessions,
   rejected logins and admin actions ([example](#logging))
-- **Transport & operations:** stdio or Streamable HTTP/HTTPS (optional mTLS), Docker image, docker compose with an
-  Oracle Free test database, Helm chart (existing Secrets, `TNS_ADMIN` from Secrets/ConfigMaps, ingress, HPA,
-  non-root); only two runtime dependencies (MCP SDK, `oracledb`)
+- **Transport & operations:** stdio or Streamable HTTP/HTTPS (optional mTLS), Docker image on Docker Hub and the
+  GitHub Container Registry (thin and thick), docker compose with an Oracle Free test database, Helm chart (existing
+  Secrets, `TNS_ADMIN` from Secrets/ConfigMaps, ingress, HPA, non-root); only two runtime dependencies (MCP SDK,
+  `oracledb`); 400+ tests — unit tests plus integration tests against Oracle Free, Keycloak and a mock OIDC server
 
 ### When to choose this server
 
@@ -50,12 +57,19 @@ the person in both the log and `V$SESSION`.
 - **Access follows your directory.** With OAuth/OIDC an assignment maps an Entra/Keycloak group or e-mail to a
   database connection (read-only reporting user for most, a DBA account for a few), deny by default; joiners and leavers are
   handled in the identity provider.
+- **Least privilege per user.** `read_only` removes the `execute` tool for a token, a group or an e-mail pattern
+  (or for everyone with `ORA_READ_ONLY`), also in sessions that are already open — analysts get `query` and the
+  diagnostics, only a few get DML, DDL and PL/SQL. Oracle still enforces it a second time: `query` runs in a read-only
+  transaction.
 - **Attributable.** The shared database account is not what DBAs see: `CLIENT_IDENTIFIER` carries the user's e-mail
   (or the token name), `ACTION` the tool, next to `[AUDIT]` log lines for logins, sessions and admin changes.
+- **Safe to expose.** The HTTP server refuses to start without authentication, a stolen `mcp-session-id` cannot be
+  used by another user, repeated failed logins are throttled per IP, and the container image is scanned in CI —
+  see [Security hardening](#security-hardening).
 - **Diagnostics included.** Skills and tools for "what is my database doing", locks, top SQL, plans, alert log and
   trace files — read-only, licence-aware (ASH/AWR/SQL Monitor only when licensed).
-- **Verified against real components.** Besides unit tests, CI runs every tool, the skills' workflows and the OAuth
-  path against an Oracle Free container and a real identity provider (Keycloak, login form included).
+- **Verified against real components.** Besides unit tests, CI runs every tool, the skills' workflows, the OAuth
+  path and the read-only enforcement against an Oracle Free container and a real identity provider (Keycloak, login form included).
 
 | | Local Oracle MCP servers (e.g. SQLcl `sql -mcp`) | oracle-mcp-server |
 |---|---|---|
@@ -63,7 +77,9 @@ the person in both the log and `V$SESSION`.
 | Client authentication | Whoever can start it | Bearer tokens, revocable at runtime, or OAuth 2.0 / OIDC single sign-on |
 | Who may use which database | The user's own saved connections | Per token, or per directory group / e-mail (OAuth assignments), deny by default |
 | Credentials & wallets | On every client machine | Stay on the server; clients only get a token |
+| Write access | Whatever the saved connection's database account may do | Same database privileges, plus per token or SSO user the `execute` tool can be removed (`read_only`); `query` is always read-only |
 | Databases per instance | Saved connections of that user | One connection per token, managed centrally |
+| Exposure as a shared service | Not applicable (local process) | No start without authentication, failed-login throttle, sessions bound to their owner, scanned image |
 | Audit | Log table `DBTOOLS$MCP_LOG` and `V$SESSION` | Server log (token or user e-mail, tool, client IP, rejected logins, `[AUDIT]` trail) and `CLIENT_IDENTIFIER` / `ACTION` in `V$SESSION` |
 
 **When to choose something else:** for a single developer working locally with SQLcl anyway, Oracle's
@@ -74,7 +90,8 @@ exposes Select AI Agent tools with OAuth. For several database engines behind on
 [DBHub](https://github.com/bytebase/dbhub). oracle-mcp-server focuses on secure, audited, multi-user SQL access to
 any Oracle Database (on-premises, cloud, container) — self-hosted, with no Oracle client install needed. It brings
 its own authorization (tokens or your identity provider) and does not replace database privileges: whatever the
-connection of a token or assignment may do, the client may do — give reporting groups a read-only database user.
+connection of a token or assignment may do, the client may do — `read_only` only removes the `execute` tool, so give
+reporting groups a read-only database user as well.
 
 ---
 
@@ -190,6 +207,9 @@ docker run -d --name oracle-mcp-server -p 3000:3000 \
   -v oracle-mcp-data:/data \
   tommi2day/oracle-mcp-server
 ```
+
+The image (and the `-thick` variant) is also published to the GitHub Container Registry with the same tags:
+`docker pull ghcr.io/tommi2day/oracle-mcp-server:latest`.
 
 or `./scripts/run.sh` (reads `.env`, generates `./auth_token`, mounts `./tns_admin` if present).
 
@@ -323,9 +343,12 @@ token store; the value here is the server default.
 |----------|---------|-------------|
 | `TRANSPORT` | `stdio` (image: `http`) | `stdio`: one client over stdin/stdout (Claude Desktop, local CLI). `http`: Streamable HTTP server for many clients, with auth, admin UI and `/health` |
 | `PORT` | `3000` | Listen port of the HTTP(S) server (`TRANSPORT=http`) |
-| `AUTH_TOKEN` | – | Admin bearer token: full access to `/mcp`, `/admin` and `/info`, uses the server default connection. If empty **and** no token file / OAuth is configured there is no authentication (development only) |
+| `AUTH_TOKEN` | – | Admin bearer token: full access to `/mcp`, `/admin` and `/info`, uses the server default connection. If empty and no `OAUTH_ISSUER` is set, the HTTP server **refuses to start** unless `ALLOW_ANONYMOUS=true` |
 | `TOKENS_FILE` | `./tokens.json` (image: `/data/tokens.json`) | JSON token store (tokens, per-token connections, OAuth assignments); created on first write, mount a volume to keep it |
-| `STORE_ENCRYPTION_KEY` | – | Passphrase; encrypts `password` / `wallet_password` in the token store with AES-256-GCM. Without it secrets are stored in clear text; changing it makes existing secrets unreadable |
+| `STORE_ENCRYPTION_KEY` | – | Passphrase; encrypts `password` / `wallet_password` in the token store with AES-256-GCM. Without it secrets are stored in clear text; changing it makes existing secrets unreadable. The key is derived with scrypt (`enc:v2:`): use a long random value; `enc:v1:` values of older versions are migrated at startup |
+| `ALLOW_ANONYMOUS` | – | `true` lets `TRANSPORT=http` start without `AUTH_TOKEN`/OAuth (development only) |
+| `ORA_READ_ONLY` | – | `true` disables the `execute` tool for all clients; tokens and OAuth assignments have a `read_only` flag of their own |
+| `AUTH_MAX_FAILURES` / `AUTH_FAILURE_WINDOW` | `20` / `60` | Failed authentications per client IP and window (seconds) before HTTP 429; `0` disables |
 | `MCP_SERVER_NAME` | `oracle-mcp-server` | Name announced to MCP clients, shown in the admin UI and written to `MODULE` in `V$SESSION` ([session identification](#session-identification)) |
 | `ORA_CLIENT_CONNECTION` | `none` | `none` \| `credentials` \| `full`: connection parameters that clients of the `AUTH_TOKEN` (or anonymous access) may send as `X-Oracle-*` headers. Tokens and OAuth assignments have their own `client_connection` ([details](#client-supplied-connections)) |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`; SQL text is only logged at `debug` ([logging](docs/logging.md)) |
@@ -442,6 +465,8 @@ export AUTH_TOKEN=<admin token> MCP_URL=http://localhost:3000
 ./scripts/admincli.sh add-token legacy --connect-string 'jdbc:oracle:thin:@dbhost:1521:ORCL' \
     --user scott --password tiger
 ./scripts/admincli.sh set-conn 2 '{"tns_alias":"PROD","tns_admin":"/opt/oracle/wallets/prod","user":"app"}'
+./scripts/admincli.sh add-token "reporting" --read-only      # token without the execute tool
+./scripts/admincli.sh set-read-only <id> true|false          # switch it later (open sessions follow)
 ```
 
 Connection object fields: `connect_string`, `tns_alias`, `host`, `port`, `service_name`, `sid`, `protocol`,
@@ -456,6 +481,32 @@ Merge rules with the default connection:
 
 Secrets are write-only: the API returns `password_set: true` instead of the password, and a `PATCH` without
 `password` keeps the stored one. Tokens with the same effective connection share one connection pool.
+
+### Read-only tokens and assignments
+
+`"read_only": true` on a token or an OAuth assignment removes the `execute` tool for its clients: it is no longer
+listed and a call is refused (`[AUTH] … action="execute" … reason="read-only"`). `query` and the performance tools
+keep working; `query` always runs in `SET TRANSACTION READ ONLY`, so Oracle itself rejects writes through it.
+
+| Scope | How to set it |
+|-------|---------------|
+| One token | Admin UI toggle *Read-only*, or `read_only` in `POST` / `PATCH /admin/tokens`; `admincli.sh add-token … --read-only` / `set-read-only <id> true\|false` |
+| One OAuth assignment | Admin UI, `/admin/assignments`, or `"read_only": true` in `OAUTH_ASSIGNMENTS`; `admincli.sh add-assignment … --read-only` / `set-assignment-read-only <id> true\|false`. A user matching several assignments is read-only if **any** of them is (the most restrictive wins) |
+| Everyone | `ORA_READ_ONLY=true` — also the `AUTH_TOKEN`, anonymous access and stdio mode (Helm: `server.readOnly`) |
+
+Changes take effect for open sessions with their next request. The flag limits the MCP tools, it does not replace a
+least-privilege database account: give the Oracle user only the grants it needs.
+
+### Security hardening
+
+| Measure | Behaviour |
+|---------|-----------|
+| No unauthenticated HTTP | `TRANSPORT=http` exits at startup without `AUTH_TOKEN` or `OAUTH_ISSUER`, unless `ALLOW_ANONYMOUS=true` (Helm: `auth.allowAnonymous`) |
+| Sessions bound to their owner | Resuming an `mcp-session-id` with another token or user returns 403 (`reason="session belongs to another principal"`) |
+| Failed-login throttle | More than `AUTH_MAX_FAILURES` (default 20, `0` = off) failed attempts per client IP within `AUTH_FAILURE_WINDOW` seconds (default 60) get HTTP 429 with `Retry-After`. Requests without a token are not counted. Behind a reverse proxy make sure `X-Forwarded-For` / `X-Real-IP` carry the client address |
+| Token store | Written with mode `0600`; secrets encrypted with a key derived by scrypt from `STORE_ENCRYPTION_KEY` (`enc:v2:`, `enc:v1:` values from older versions are migrated at startup) — use a long random value |
+| Admin UI | Served with `Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`; pending OAuth logins are capped and oversized request bodies close the connection |
+| Image | Trivy scans the Docker image in CI and before each release push (fixable HIGH/CRITICAL findings fail the build) |
 
 ### Client-supplied connections
 
@@ -551,18 +602,18 @@ Rules and safeguards:
 
 ### Admin UI
 
-Open `http://<server>:3000/admin`, sign in with the server URL and the `AUTH_TOKEN` value (leave it empty if auth
-is disabled). The session is kept in `sessionStorage` and cleared when the browser tab is closed.
+Open `http://<server>:3000/admin`, sign in with the server URL and the `AUTH_TOKEN` value (leave it empty only with
+`ALLOW_ANONYMOUS=true`). The session is kept in `sessionStorage` and cleared when the browser tab is closed.
 
 **Token list** — server info with the default connection and enabled performance features, then every token with
 status, connection (server default, host / service or TNS alias) and last use:
 
-![Admin UI: token list](docs/images/admin-tokens.png)
+![Admin UI: token list, read-only tokens are marked](docs/images/admin-tokens.png)
 
 <table>
   <tr>
     <td width="33%" valign="top"><b>Login</b><br><img src="docs/images/admin-login.png" alt="Admin UI: login"></td>
-    <td width="33%" valign="top"><b>New token with its own connection</b> — TNS alias over TCPS with server certificate DN pinning; Diagnostics/Tuning Pack per token<br><img src="docs/images/admin-create-token.png" alt="Admin UI: create token with TNS alias connection"></td>
+    <td width="33%" valign="top"><b>New token with its own connection</b> — TNS alias over TCPS with server certificate DN pinning; <i>Read-only</i> switch removes the <code>execute</code> tool; Diagnostics/Tuning Pack per token<br><img src="docs/images/admin-create-token.png" alt="Admin UI: create token with TNS alias connection"></td>
     <td width="33%" valign="top"><b>Token value is shown only once</b><br><img src="docs/images/admin-token-created.png" alt="Admin UI: one-time token display"></td>
   </tr>
 </table>
@@ -670,12 +721,12 @@ Users and groups are assigned to connections in the admin UI (*OAuth assignments
 <table>
   <tr>
     <td width="35%" valign="top"><b>Login with single sign-on</b> next to the token login<br><img src="docs/images/admin-sso-login.png" alt="Admin UI: login with single sign-on button"></td>
-    <td width="65%" valign="top"><b>OAuth assignments</b> — groups and users mapped to a default connection; <i>environment</i> entries come from <code>OAUTH_*</code> and are read-only<br><img src="docs/images/admin-assignments.png" alt="Admin UI: OAuth assignments"></td>
+    <td width="65%" valign="top"><b>OAuth assignments</b> — groups and users mapped to a default connection, with a <i>read-only</i> marker for users without the <code>execute</code> tool; <i>environment</i> entries come from <code>OAUTH_*</code> and cannot be edited<br><img src="docs/images/admin-assignments.png" alt="Admin UI: OAuth assignments"></td>
   </tr>
 </table>
 
 <details>
-<summary>Edit assignment: user, admin role, client-supplied connection and default connection</summary>
+<summary>Edit assignment: user, admin role, client-supplied connection, read-only and default connection</summary>
 
 <img src="docs/images/admin-assignment-edit.png" width="420" alt="Admin UI: edit assignment">
 
@@ -869,4 +920,4 @@ Log format: see [docs/logging.md](docs/logging.md). Performance tools: [docs/per
 
 ## License
 
-[MIT](LICENSE) © Tommi2Day
+[Apache-2.0](LICENSE) © Tommi2Day

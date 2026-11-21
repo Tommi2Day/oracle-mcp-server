@@ -40,7 +40,7 @@ Pairs are separated by a single space. Values are enclosed in double quotes, exc
 | `MCP` | info | `token` `action` `ip` [`params`] | Tool call. `action` = tool name. `params` is omitted for tools without arguments; `params.sql` is replaced by `<N chars, LOG_LEVEL=debug to show>` unless `LOG_LEVEL=debug` |
 | `MCP` | error | `token` `action` `ip` `error` | Tool call failed |
 | `SESSION` | info | `token` `action` `session` `ip` [`connection` `target` `user`] [`duration`] | `action` = `start` \| `stop`; `duration` only on `stop`; `connection="client"` with `target` / `user` on `start` when the client supplied its own connection parameters (X-Oracle-* headers) |
-| `AUTH` | warn | `result` [`token`] `action` `ip` `reason` | Rejected request (HTTP 401/403). `result` = `denied`; `action` = `<METHOD> <path>`; `reason` = `missing token` \| `invalid admin token` \| `unknown token` \| `token disabled` (only the last one has `token`), `client connection: <message>` for rejected X-Oracle-* headers (HTTP 400/403, with `token`), or `oauth: <message>` for OAuth tokens and logins (`token expired`, `audience not accepted`, `invalid signature`, `no assignment for this user or groups` with `token="<e-mail>"`, `not an admin`, …). The presented token is never logged |
+| `AUTH` | warn | `result` [`token`] `action` `ip` `reason` | Rejected request (HTTP 401/403/429). `result` = `denied`; `action` = `<METHOD> <path>`; `reason` = `missing token` \| `invalid admin token` \| `unknown token` \| `token disabled` (only the last one has `token`), `client connection: <message>` for rejected X-Oracle-* headers (HTTP 400/403, with `token`), or `oauth: <message>` for OAuth tokens and logins (`token expired`, `audience not accepted`, `invalid signature`, `no assignment for this user or groups` with `token="<e-mail>"`, `not an admin`, …). The presented token is never logged |
 | `AUDIT` | info | `user` [`sub`] `action` [`session`] [`via`] [`assignment`] [`admin`] `ip` (key order varies; consumers must read by key) | Audit trail of OAuth users ([oauth.md](oauth.md#audit)): `action` = `login` \| `logout` (admin UI), `session_start` (MCP session, with `session`, `assignment` = id of the matched assignment and `admin`), or `<METHOD> <path>` of a changing admin API call (`via="oauth-admin"`). `user` = e-mail (subject if the token has none), `sub` = object id (`oid`/`sub`) |
 | `ADMIN` | info | `token` `action` `ip` | Admin API call; `token` = `admin` or `anonymous` (auth disabled) |
 | `ADMIN` | error | `token` `action` `ip` `error` | Admin API call failed |
@@ -192,6 +192,9 @@ keys differ per tool; `flattened` avoids mapping growth and type conflicts).
 |----------|-------|
 | Rejected logins | `pgmcp.category:AUTH` — group by `source.ip` and `pgmcp.reason` to spot brute force |
 | Use of disabled tokens | `pgmcp.reason:"token disabled"` |
+| Throttled clients (brute force) | `reason:"too many failed attempts"` |
+| Writes refused for read-only tokens | `category:AUTH and action:execute and reason:"read-only"` |
+| Stolen / guessed session ids | `reason:"session belongs to another principal"` |
 | Failed tool calls | `pgmcp.category:MCP and log.level:error` |
 | Write statements | `pgmcp.action:execute` |
 | Activity of one client | `pgmcp.token:"reporting-team"` |

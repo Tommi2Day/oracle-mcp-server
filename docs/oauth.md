@@ -59,7 +59,7 @@ In the admin UI (sign in with single sign-on as an admin) the assignments are ma
 
 </details>
 
-An assignment is `{ "group" | "user", "connection", "client_connection", "admin" }`:
+An assignment is `{ "group" | "user", "connection", "client_connection", "admin", "read_only" }`:
 
 ```json
 [
@@ -67,6 +67,7 @@ An assignment is `{ "group" | "user", "connection", "client_connection", "admin"
     "connection": { "host": "reporting-db", "service_name": "REPORTS", "user": "ro", "password": "…" } },
   { "user": "alice@example.com", "connection": { "tns_alias": "PROD_HIGH", "user": "app" }, "client_connection": "credentials" },
   { "user": "*@example.com" },
+  { "group": "aaaaaaaa-0000-0000-0000-000000000000", "read_only": true },
   { "group": "99999999-8888-7777-6666-555555555555", "admin": true }
 ]
 ```
@@ -84,6 +85,9 @@ TLS fields, `diagnostics_pack`, `tuning_pack`).
 - **`client_connection`** (`none` default, `credentials`, `full`) works as for tokens: it controls whether the user
   may override the connection with `X-Oracle-*` headers on the `initialize` request
   ([README](../README.md#client-supplied-connections)).
+- **`read_only: true`**: the `execute` tool is hidden and refused for the user; a user matching several assignments
+  is read-only if any of them is (most restrictive wins). Changes apply to open sessions with their next request
+  ([README](../README.md#read-only-tokens-and-assignments)).
 - **User by object id:** `user` may also be the immutable object id (Entra `oid`, otherwise `sub`), e.g.
   `{ "user": "0f9c1c2e-…", "admin": true }`. Prefer this for admins: e-mail, `preferred_username` and `upn` are
   mutable attributes — keep `OAUTH_ALLOWED_ISSUERS` to your own tenant and don't trust e-mail matching with
@@ -102,6 +106,7 @@ export AUTH_TOKEN=<admin token or access token of an OAuth admin> MCP_URL=http:/
 ./scripts/admincli.sh whoami                       # who am I, is OAuth configured
 ./scripts/admincli.sh add-assignment --group grp-dba --tns-alias PROD_HIGH --user mcp_dba --password secret
 ./scripts/admincli.sh add-assignment --email alice@example.com --client-connection credentials
+./scripts/admincli.sh add-assignment --group grp-reporting --read-only
 ./scripts/admincli.sh add-assignment --email '*@example.com'      # access with the default connection
 ./scripts/admincli.sh add-assignment --group grp-admin --admin    # may use the admin UI and API
 ./scripts/admincli.sh list-assignments
