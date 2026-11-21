@@ -346,6 +346,16 @@ export function applyClientConnection(token: OraConnection | null, client: OraCo
   return out;
 }
 
+/** True if a client connect string points at server-side wallets / TNS_ADMIN, also when percent-encoded. */
+function referencesServerFiles(cs: string): boolean {
+  if (CLIENT_FORBIDDEN_CS.test(cs)) return true;
+  try {
+    return CLIENT_FORBIDDEN_CS.test(decodeURIComponent(cs));
+  } catch {
+    return true; // malformed escape sequences are never legitimate here
+  }
+}
+
 /** Checks the client fields against the token's mode; throws ClientConnectionError (403/400). */
 function validateClientConnection(c: OraConnection, keys: string[],
   mode: ClientConnectionMode): { hasUser: boolean; hasTarget: boolean } {
@@ -358,7 +368,7 @@ function validateClientConnection(c: OraConnection, keys: string[],
   if (denied.length) {
     throw new ClientConnectionError(`Not allowed for this token (client_connection=${mode}): ${denied.join(", ")}`, 403);
   }
-  if (nonEmpty(c.connect_string) && CLIENT_FORBIDDEN_CS.test(c.connect_string!)) {
+  if (nonEmpty(c.connect_string) && referencesServerFiles(c.connect_string!)) {
     throw new ClientConnectionError("Connect string must not reference wallets or TNS_ADMIN directories", 400);
   }
   const hasUser = !!nonEmpty(c.user);

@@ -294,6 +294,14 @@ describe("session tags", () => {
 });
 
 describe("applyClientConnection", () => {
+  it("rejects connect strings that reference server files, also percent-encoded or malformed", () => {
+    for (const cs of ["a:1521/s?TNS_ADMIN=/etc", "a:1521/s?TNS%5FADMIN=/etc", "a:1521/s?wallet%5Flocation=/etc",
+      "jdbc:oracle:thin:@a:1521/s?tns%5fadmin=/etc", "a:1521/s?x=%E0%A4%A"]) {
+      expect(() => applyClientConnection(null, { connect_string: cs, user: "u", password: "p" }, "full"), cs)
+        .toThrow(/wallets or TNS_ADMIN|ClientConnection|Connect string/);
+    }
+  });
+
   const token = { tns_alias: "PROD", user: "app", password: "pw", wallet_location: "/w", ssl_server_cert_dn: "CN=prod", diagnostics_pack: true };
 
   it("returns the token connection without client parameters", () => {
