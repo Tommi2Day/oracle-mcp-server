@@ -189,6 +189,17 @@ describe("admin API: assignments", () => {
     expect(body.assignments.find((a: any) => a.id === 1).source).toBe("store");
   });
 
+  it("stores read_only on assignments (create and PATCH), drops false, rejects non-booleans", async () => {
+    const created = await call("POST", "/admin/assignments", { group: "grp-ro", read_only: true });
+    expect(created.body).toMatchObject({ id: 1, read_only: true });
+    expect((await call("POST", "/admin/assignments", { group: "x", read_only: "yes" })).status).toBe(400);
+    expect((await call("PATCH", "/admin/assignments/1", { read_only: 1 })).status).toBe(400);
+    expect((await call("PATCH", "/admin/assignments/1", { read_only: false })).status).toBe(200);
+    expect(store.assignments[0]).not.toHaveProperty("read_only");
+    const plain = await call("POST", "/admin/assignments", { group: "grp-rw", read_only: false });
+    expect(plain.body).not.toHaveProperty("read_only");
+  });
+
   it("creates, updates and deletes a stored assignment", async () => {
     const created = await call("POST", "/admin/assignments", { group: "grp-dba", connection: { host: "dba" }, client_connection: "credentials", admin: false });
     expect(created.status).toBe(201);
@@ -234,7 +245,7 @@ describe("admin API: assignments", () => {
     await call("POST", "/admin/assignments", { group: "g", connection: { host: "h", password: "topsecret" } });
     const written = mockWriteFile.mock.calls.at(-1)![1];
     expect(written).not.toContain("topsecret");
-    expect(written).toContain("enc:v1:");
+    expect(written).toContain("enc:v2:");
     clearTokenStoreCache();
     mockReadFile.mockImplementation(() => written);
     const { body } = await call("GET", "/admin/assignments");
@@ -375,8 +386,8 @@ describe("token store with assignments", () => {
     const written = mockWriteFile.mock.calls.at(-1)![1] as string;
     expect(written).not.toContain("pw-plain");
     expect(written).not.toContain("wpw-plain");
-    expect(written).toContain("enc:v1:");
-    expect(lines().join("\n")).toMatch(/\[STORE\] Encrypted 2 plaintext secret\(s\)/);
+    expect(written).toContain("enc:v2:");
+    expect(lines().join("\n")).toMatch(/\[STORE\] Encrypted 2 plaintext\/legacy secret\(s\)/);
     clearTokenStoreCache();
     expect(loadTokenStore().assignments![0].connection).toMatchObject({ password: "pw-plain", wallet_password: "wpw-plain" });
   });

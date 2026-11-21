@@ -52,7 +52,51 @@ export function audit(fields: Record<string, unknown>): void {
   log("info", "AUDIT", parts.join(" "));
 }
 
+// ── Failed-login throttle (per client IP) ─────────────────────────────────────
+const authFailures = new Map<string, { count: number; since: number }>();
+const THROTTLE_MAX_IPS = 10_000;
+
+/** AUTH_MAX_FAILURES (default 20) failed attempts per AUTH_FAILURE_WINDOW seconds (default 60) per IP; 0 disables. */
+function throttleConfig(): { max: number; window: number } {
+  const max = Number.parseInt(process.env.AUTH_MAX_FAILURES ?? "20", 10);
+  const window = Number.parseInt(process.env.AUTH_FAILURE_WINDOW || "60", 10) * 1000;
+  return { max: Number.isNaN(max) ? 20 : max, window: window > 0 ? window : 60_000 };
+}
+
+export function clearAuthThrottle(): void { authFailures.clear(); }
+
+function recordAuthFailure(req: IncomingMessage): void {
+  const { max, window } = throttleConfig();
+  if (max <= 0) return;
+  const ip = getClientIp(req);
+  const now = Date.now();
+  const e = authFailures.get(ip);
+  if (e && now - e.since < window) { e.count++; return; }
+  if (authFailures.size >= THROTTLE_MAX_IPS) {
+    for (const [k, v] of authFailures) if (now - v.since >= window) authFailures.delete(k);
+    if (authFailures.size >= THROTTLE_MAX_IPS) authFailures.delete(authFailures.keys().next().value as string);
+  }
+  authFailures.set(ip, { count: 1, since: now });
+}
+
+/** True (and 429 sent) when the client IP exceeded the failed-attempt limit. */
+function isThrottled(req: IncomingMessage, res: ServerResponse): boolean {
+  const { max, window } = throttleConfig();
+  if (max <= 0) return false;
+  const ip = getClientIp(req);
+  const e = authFailures.get(ip);
+  if (!e) return false;
+  const left = Math.ceil((e.since + window - Date.now()) / 1000);
+  if (left <= 0) { authFailures.delete(ip); return false; }
+  if (e.count < max) return false;
+  log("warn", "AUTH", `result="denied" action="${req.method} ${new URL(req.url || "/", "http://x").pathname}" ip="${ip}" reason="too many failed attempts"`);
+  res.writeHead(429, { "Content-Type": "application/json", "Retry-After": String(left) });
+  res.end(JSON.stringify({ error: "Too many failed authentication attempts" }));
+  return true;
+}
+
 function logAuthFailure(req: IncomingMessage, reason: string, tokenName?: string): void {
+  if (!reason.endsWith("missing token")) recordAuthFailure(req);
   const pathname = new URL(req.url || "/", "http://x").pathname;
   const tokenPart = tokenName ? ` token="${tokenName}"` : "";
   log("warn", "AUTH", `result="denied"${tokenPart} action="${req.method} ${pathname}" ip="${getClientIp(req)}" reason="${reason}"`);
@@ -90,6 +134,8 @@ export interface TokenRecord {
   connection: OraConnection | null;
   /** What MCP clients of this token may set via X-Oracle-* headers (default: none). */
   client_connection?: ClientConnectionMode;
+  /** The `execute` tool is hidden and refused for this token. */
+  read_only?: boolean;
 }
 
 /** OAuth assignment created in the admin UI (stored next to the tokens). */
@@ -116,16 +162,22 @@ let tokenStoreCache: TokenStore | null = null;
 export function clearTokenStoreCache(): void { tokenStoreCache = null; }
 
 // ── Store encryption (AES-256-GCM, keyed by STORE_ENCRYPTION_KEY env var) ─────
-const ENC_PREFIX = "enc:v1:";
+const ENC_PREFIX = "enc:v2:";    // key derived with scrypt
+const ENC_PREFIX_V1 = "enc:v1:"; // legacy: key = SHA-256(STORE_ENCRYPTION_KEY); still readable, re-encrypted at startup
+const isEncrypted = (v: unknown): v is string => typeof v === "string" && (v.startsWith(ENC_PREFIX) || v.startsWith(ENC_PREFIX_V1));
+const KDF_SALT = "oracle-mcp-server/store-encryption/v2";
+let kdfCache: { raw: string; key: Buffer } | null = null;
 
-function getEncryptionKey(): Buffer | null {
+function getEncryptionKey(legacy = false): Buffer | null {
   const raw = process.env.STORE_ENCRYPTION_KEY;
   if (!raw) return null;
-  return crypto.createHash("sha256").update(raw).digest(); // 32-byte AES-256 key
+  if (legacy) return crypto.createHash("sha256").update(raw).digest();
+  if (kdfCache?.raw !== raw) kdfCache = { raw, key: crypto.scryptSync(raw, KDF_SALT, 32) }; // 32-byte AES-256 key
+  return kdfCache.key;
 }
 
 function encryptValue(plaintext: string): string {
-  if (plaintext.startsWith(ENC_PREFIX)) return plaintext;
+  if (isEncrypted(plaintext)) return plaintext;
   const key = getEncryptionKey();
   if (!key) return plaintext;
   const iv = crypto.randomBytes(12);
@@ -136,13 +188,13 @@ function encryptValue(plaintext: string): string {
 }
 
 function decryptValue(value: unknown): unknown {
-  if (typeof value !== "string" || !value.startsWith(ENC_PREFIX)) return value;
-  const key = getEncryptionKey();
+  if (!isEncrypted(value)) return value;
+  const key = getEncryptionKey(value.startsWith(ENC_PREFIX_V1));
   if (!key) {
     log("warn", "STORE", "Encrypted secret found but STORE_ENCRYPTION_KEY is not set — connection will fail.");
     return value;
   }
-  const parts = value.slice(ENC_PREFIX.length).split(":");
+  const parts = value.slice(ENC_PREFIX.length).split(":"); // both prefixes have the same length
   if (parts.length !== 3) throw new Error("Malformed encrypted value in token store — check STORE_ENCRYPTION_KEY");
   try {
     const [ivHex, tagHex, ctHex] = parts;
@@ -189,7 +241,9 @@ export function loadTokenStore(): TokenStore {
 export function saveTokenStore(data: TokenStore): void {
   const file = getTokensFile();
   const toWrite = getEncryptionKey() ? mapStoreSecrets(data, encryptValue) : data;
+  // mode only applies to new files, so chmod too
   fs.writeFileSync(file, JSON.stringify(toWrite, null, 2), { encoding: "utf8", mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch { /* best effort (e.g. Windows, read-only mounts) */ }
   tokenStoreCache = data;
 }
 
@@ -208,12 +262,12 @@ export function migrateTokenStore(): void {
   for (const t of [...rawData.tokens, ...(rawData.assignments ?? [])]) {
     for (const f of SECRET_FIELDS) {
       const v = t.connection?.[f];
-      if (typeof v === "string" && v && !v.startsWith(ENC_PREFIX)) plainCount++;
+      if (typeof v === "string" && v && !v.startsWith(ENC_PREFIX)) plainCount++; // plaintext and legacy v1
     }
   }
   if (plainCount === 0) return;
   saveTokenStore(mapStoreSecrets(rawData, decryptValue)); // re-encrypts every secret
-  log("info", "STORE", `Encrypted ${plainCount} plaintext secret(s) in token store.`);
+  log("info", "STORE", `Encrypted ${plainCount} plaintext/legacy secret(s) in token store.`);
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
@@ -257,7 +311,7 @@ export function readBody(req: IncomingMessage): Promise<string> {
     let size = 0;
     req.on("data", (chunk: Buffer | string) => {
       size += chunk.length;
-      if (size > 1_048_576) { reject(new Error("Request body too large")); return; }
+      if (size > 1_048_576) { reject(new Error("Request body too large")); req.destroy?.(); return; }
       body += chunk;
     });
     req.on("end", () => resolve(body));
@@ -282,6 +336,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 export function checkAdminAuth(req: IncomingMessage, res: ServerResponse): boolean {
   const authToken = getAuthToken();
   if (!authToken) return true;
+  if (isThrottled(req, res)) return false;
   const token = extractBearer(req);
   if (!token) { logAuthFailure(req, "missing token"); send401(res); return false; }
   if (!timingSafeEqual(token, authToken)) { logAuthFailure(req, "invalid admin token"); send401(res); return false; }
@@ -297,7 +352,7 @@ export interface SessionIdentity {
 }
 
 export type AuthResult =
-  | { ok: true; name: string; connection: OraConnection | null; clientConnection: ClientConnectionMode; identity?: SessionIdentity }
+  | { ok: true; name: string; connection: OraConnection | null; clientConnection: ClientConnectionMode; readOnly: boolean; identity?: SessionIdentity }
   | { ok: false };
 
 /** client_connection for the AUTH_TOKEN / anonymous sessions (ORA_CLIENT_CONNECTION, default none). */
@@ -338,6 +393,7 @@ async function checkOAuthBearer(req: IncomingMessage, res: ServerResponse, token
   return {
     ok: true, name: identity.display, connection: access.connection ?? null,
     clientConnection: parseClientConnectionMode(access.clientConnection) ?? "none",
+    readOnly: envReadOnly() || access.readOnly === true,
     identity: { sub: identity.sub, email: identity.email, name: identity.name, assignment: access.assignment, admin: access.admin },
   };
 }
@@ -353,7 +409,13 @@ function checkFileToken(req: IncomingMessage, res: ServerResponse, token: string
   return {
     ok: true, name: entry.name, connection: entry.connection || null,
     clientConnection: parseClientConnectionMode(entry.client_connection) ?? "none",
+    readOnly: envReadOnly() || entry.read_only === true,
   };
+}
+
+/** ORA_READ_ONLY=true: the `execute` tool is disabled for every client (token/assignment `read_only` does it per entry). */
+export function envReadOnly(): boolean {
+  return ["true", "1", "yes"].includes((process.env.ORA_READ_ONLY || "").toLowerCase());
 }
 
 /** MCP auth — accepts AUTH_TOKEN env var, any active file token or (OAUTH_ISSUER set) an OAuth access token.
@@ -361,11 +423,12 @@ function checkFileToken(req: IncomingMessage, res: ServerResponse, token: string
 export async function checkAuth(req: IncomingMessage, res: ServerResponse): Promise<AuthResult> {
   const authToken = getAuthToken();
   const oauth = getOAuthConfig();
-  if (!authToken && !oauth) return { ok: true, name: "anonymous", connection: null, clientConnection: envClientConnectionMode() };
+  if (!authToken && !oauth) return { ok: true, name: "anonymous", connection: null, clientConnection: envClientConnectionMode(), readOnly: envReadOnly() };
+  if (isThrottled(req, res)) return { ok: false };
   const token = extractBearer(req);
   if (!token) { logAuthFailure(req, "missing token"); send401(res); return { ok: false }; }
   if (authToken && timingSafeEqual(token, authToken)) {
-    return { ok: true, name: "admin", connection: null, clientConnection: envClientConnectionMode() };
+    return { ok: true, name: "admin", connection: null, clientConnection: envClientConnectionMode(), readOnly: envReadOnly() };
   }
   if (oauth && looksLikeJwt(token)) return checkOAuthBearer(req, res, token, oauth);
   return checkFileToken(req, res, token);
@@ -398,6 +461,7 @@ export async function authenticateAdmin(req: IncomingMessage, res: ServerRespons
     if (!checkAdminAuth(req, res)) return { ok: false };
     return getAuthToken() ? { ok: true, name: "admin", method: "token" } : { ok: true, name: "anonymous", method: "none" };
   }
+  if (isThrottled(req, res)) return { ok: false };
   const token = extractBearer(req);
   const authToken = getAuthToken();
   if (token && authToken && timingSafeEqual(token, authToken)) return { ok: true, name: "admin", method: "token" };
@@ -534,6 +598,7 @@ export interface AdminHooks {
   onUpdate?: (before: { connection?: OraConnection | null }, after: { connection?: OraConnection | null; active?: boolean }) => void;
 }
 
+const READ_ONLY_ERROR = '"read_only" must be true or false';
 const CLIENT_MODE_ERROR = '"client_connection" must be none, credentials or full';
 
 /** ADMIN log line of every call; changing calls of OAuth users are also audited.
@@ -599,7 +664,8 @@ function listTokens(_req: IncomingMessage, res: ServerResponse): void {
 }
 
 /** Validation of the POST body; returns an error message or null. */
-function createError(body: { name?: unknown; connection?: unknown; client_connection?: unknown }): string | null {
+function createError(body: { name?: unknown; connection?: unknown; client_connection?: unknown; read_only?: unknown }): string | null {
+  if (body.read_only !== undefined && typeof body.read_only !== "boolean") return READ_ONLY_ERROR;
   if (!body.name || typeof body.name !== "string" || !body.name.trim()) return '"name" is required';
   return validateConnection(body.connection)
     ?? (parseClientConnectionMode(body.client_connection) ? null : CLIENT_MODE_ERROR);
@@ -622,6 +688,7 @@ async function createToken(req: IncomingMessage, res: ServerResponse): Promise<v
     active:       true,
     connection:   cleanConnection(body.connection),
     ...(clientMode !== "none" && { client_connection: clientMode }),
+    ...(body.read_only === true && { read_only: true }),
   };
   store.tokens.push(entry);
   saveTokenStore(store);
@@ -631,9 +698,10 @@ async function createToken(req: IncomingMessage, res: ServerResponse): Promise<v
 /** Validation of the PATCH body; returns an error message or null. */
 function updateError(updates: Record<string, unknown>): string | null {
   if (updates.name === undefined && updates.active === undefined && updates.connection === undefined
-      && updates.client_connection === undefined) {
-    return "No valid fields (name, active, connection, client_connection)";
+      && updates.client_connection === undefined && updates.read_only === undefined) {
+    return "No valid fields (name, active, connection, client_connection, read_only)";
   }
+  if (updates.read_only !== undefined && typeof updates.read_only !== "boolean") return READ_ONLY_ERROR;
   if (updates.name !== undefined && (typeof updates.name !== "string" || !updates.name.trim())) {
     return '"name" must be a non-empty string';
   }
@@ -647,6 +715,10 @@ function applyTokenUpdates(entry: TokenRecord, updates: Record<string, unknown>)
   if (updates.active !== undefined) entry.active = !!updates.active;
   if (updates.connection !== undefined) {
     entry.connection = cleanConnection(mergeSecrets(updates.connection as OraConnection | null, entry.connection));
+  }
+  if (updates.read_only !== undefined) {
+    if (updates.read_only) entry.read_only = true;
+    else delete entry.read_only;
   }
   if (updates.client_connection === undefined) return;
   const clientMode = parseClientConnectionMode(updates.client_connection);
@@ -691,6 +763,12 @@ function toSafeAssignment<T extends { connection?: OraConnection | null }>(e: T)
   return { ...e, connection: conn as OraConnection };
 }
 
+/** Default values are not stored: client_connection "none", read_only false. */
+function dropDefaults(entry: StoredAssignment): void {
+  if (entry.client_connection === "none") delete entry.client_connection;
+  if (entry.read_only !== true) delete entry.read_only;
+}
+
 // GET /admin/assignments – env assignments (read-only) followed by the stored ones; secrets never leave the server
 function listAssignments(_req: IncomingMessage, res: ServerResponse): void {
   const stored = (loadTokenStore().assignments ?? []).map(a => ({ ...toSafeAssignment(a), source: "store" }));
@@ -720,14 +798,14 @@ async function createAssignment(req: IncomingMessage, res: ServerResponse): Prom
     connection: cleanConnection(body.connection),
     created_at: new Date().toISOString(),
   };
-  if (entry.client_connection === "none") delete entry.client_connection;
+  dropDefaults(entry);
   store.next_assignment_id = entry.id + 1;
   store.assignments = [...(store.assignments ?? []), entry];
   saveTokenStore(store);
   sendJson(res, 201, { ...toSafeAssignment(entry), source: "store" });
 }
 
-// PATCH /admin/assignments/:id – change connection, client_connection, admin, note (not group/user: delete and re-create)
+// PATCH /admin/assignments/:id – change connection, client_connection, admin, read_only, note (not group/user: delete and re-create)
 async function updateAssignment(req: IncomingMessage, res: ServerResponse, id: number, { onUpdate }: AdminHooks): Promise<void> {
   const updates = await readJsonBody(req);
   if (updates.group !== undefined || updates.user !== undefined) {
@@ -744,7 +822,7 @@ async function updateAssignment(req: IncomingMessage, res: ServerResponse, id: n
   if (updates.connection !== undefined) {
     entry.connection = cleanConnection(mergeSecrets(updates.connection as OraConnection | null, before.connection ?? null));
   }
-  if (entry.client_connection === "none") delete entry.client_connection;
+  dropDefaults(entry);
   saveTokenStore(store);
   onUpdate?.(before, entry);
   sendJson(res, 200, { ...toSafeAssignment(entry), source: "store" });

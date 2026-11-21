@@ -273,6 +273,7 @@ export interface Assignment {
   connection?: OraConnection | null;
   client_connection?: ClientConnectionMode;
   admin?: boolean;
+  read_only?: boolean;
   note?: string;
   source?: "env" | "store";
 }
@@ -280,13 +281,14 @@ export interface Assignment {
 export interface Access {
   allowed: boolean;
   admin: boolean;
+  readOnly?: boolean;
   connection?: OraConnection | null;
   clientConnection?: ClientConnectionMode;
   assignment?: string;
 }
 
 /** What an assignment may contain: group xor user, connection (object|null), client_connection, admin. */
-export const ASSIGNMENT_FIELDS = ["group", "user", "connection", "client_connection", "admin", "note"] as const;
+export const ASSIGNMENT_FIELDS = ["group", "user", "connection", "client_connection", "admin", "read_only", "note"] as const;
 
 function envJsonAssignments(): Assignment[] {
   const raw = process.env.OAUTH_ASSIGNMENTS;
@@ -326,6 +328,7 @@ export function assignmentError(a: unknown, { partial = false } = {}): string | 
   const c = body.connection;
   if (c !== undefined && c !== null && (typeof c !== "object" || Array.isArray(c))) return '"connection" must be an object or null';
   if (body.admin !== undefined && typeof body.admin !== "boolean") return '"admin" must be true or false';
+  if (body.read_only !== undefined && typeof body.read_only !== "boolean") return '"read_only" must be true or false';
   return null;
 }
 
@@ -365,6 +368,7 @@ export function resolveAccess(identity: Identity, assignments: Assignment[]): Ac
   return {
     allowed: true,
     admin: scored.some(s => s.a.admin === true),
+    readOnly: scored.some(s => s.a.read_only === true), // the most restrictive matching assignment wins
     connection: primary.a.connection ?? null,
     clientConnection: primary.a.client_connection ?? "none",
     assignment: String(primary.a.id ?? ""),
@@ -389,6 +393,8 @@ export async function startLogin(config: OAuthConfig, returnTo = "/admin"): Prom
   const { authorization_endpoint: endpoint } = await getMetadata(config);
   if (!endpoint) throw new OAuthError("issuer has no authorization_endpoint");
   prune(pendingLogins, v => Date.now() - v.at > LOGIN_TTL_MS);
+  // unauthenticated endpoint: cap the map so a flood cannot exhaust memory (oldest entries go first)
+  while (pendingLogins.size >= MAX_ENTRIES) pendingLogins.delete(pendingLogins.keys().next().value as string);
   const state = randomToken(); const nonce = randomToken(); const verifier = randomToken(48);
   pendingLogins.set(state, { verifier, nonce, at: Date.now(), returnTo });
   const url = new URL(endpoint);

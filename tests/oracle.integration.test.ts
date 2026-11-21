@@ -269,6 +269,7 @@ describe.skipIf(!HOST)("Oracle integration (sample schemas)", () => {
         { group: "grp-sales", connection: conn(SALES) },
         { group: "grp-hr", connection: conn(HR) },
         { user: "carol@example.com", connection: conn(SALES), client_connection: "credentials" },
+        { group: "grp-ro", read_only: true },
       ]),
     };
 
@@ -395,6 +396,20 @@ describe.skipIf(!HOST)("Oracle integration (sample schemas)", () => {
       expect(all).toMatch(/\[MCP\] token="alice@example\.com" action="query"/);
     });
 
+    it("read_only assignment: no execute tool; the most restrictive matching assignment wins", async () => {
+      const rw = await open({ email: "alice@example.com", oid: "oid-alice", groups: ["grp-sales"] });
+      expect((await rw.listTools()).tools.map(t => t.name)).toContain("execute");
+
+      const ro = await open({ email: "frank@example.com", oid: "oid-frank", groups: ["grp-sales", "grp-ro"] });
+      expect((await ro.listTools()).tools.map(t => t.name)).not.toContain("execute");
+      const r = await ro.callTool({ name: "execute", arguments: { sql: `INSERT INTO customers VALUES (99, 'Evil', 'XX')` } });
+      expect(r.isError).toBe(true);
+      expect(text(r)).toMatch(/read-only/);
+      expect(logs.join("\n")).toMatch(/\[AUTH\] result="denied" token="frank@example\.com" action="execute"[^\n]*reason="read-only"/);
+      expect(await sql(ro, "SELECT COUNT(*) AS n FROM customers WHERE id = 99")).toMatch(/\b0\b/);
+      expect(await sql(ro, "SELECT COUNT(*) AS n FROM customers")).toContain("3"); // reading still works
+    });
+
     it("the 401 challenge points MCP clients to the protected resource metadata", async () => {
       const res = await realFetch(`${base}/mcp`, { method: "POST", body: "{}" });
       expect(res.status).toBe(401);
@@ -423,6 +438,124 @@ describe.skipIf(!HOST)("Oracle integration (sample schemas)", () => {
       expect((await api(root, "DELETE", `/admin/assignments/${body.id}`)).status).toBe(200);
       await expect(open(eve)).rejects.toThrow();
       expect(logs.join("\n")).toMatch(/\[AUDIT\] user="root@example\.com" sub="oid-root" action="POST \/admin\/assignments"[^\n]*via="oauth-admin"/);
+    });
+  });
+
+  // ── 3. Read-only tokens over HTTP against the real database ─────────────────
+  describe("read-only tokens (file tokens, admin API, ORA_READ_ONLY)", () => {
+    const ADMIN_TOKEN = "it-admin-token";
+    let srv: http.Server; let base: string; let dir: string; let realFetch: typeof fetch;
+    const clients: Client[] = [];
+    const saved: Record<string, string | undefined> = {};
+    const KEYS = ["AUTH_TOKEN", "TOKENS_FILE", "OAUTH_ISSUER", "OAUTH_ASSIGNMENTS", "OAUTH_ADMIN_USERS", "ORA_READ_ONLY", "AUTH_MAX_FAILURES"];
+
+    beforeAll(async () => {
+      await runSql(SALES, [`CREATE TABLE scratch (id NUMBER)`]);
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "oramcp-ro-"));
+      srv = http.createServer(handleRequest);
+      await new Promise<void>(r => srv.listen(0, "127.0.0.1", r));
+      base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
+    });
+    afterAll(async () => {
+      await new Promise(r => srv.close(r));
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+    beforeEach(() => {
+      for (const k of KEYS) saved[k] = process.env[k];
+      for (const k of ["OAUTH_ISSUER", "OAUTH_ASSIGNMENTS", "OAUTH_ADMIN_USERS", "ORA_READ_ONLY"]) delete process.env[k];
+      Object.assign(process.env, { AUTH_TOKEN: ADMIN_TOKEN, TOKENS_FILE: path.join(dir, "tokens.json"), AUTH_MAX_FAILURES: "0" });
+      fs.rmSync(process.env.TOKENS_FILE as string, { force: true });
+      clearOAuthCache(); clearTokenStoreCache();
+      realFetch = globalThis.fetch;
+      vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+    afterEach(async () => {
+      for (const c of clients.splice(0)) await c.close().catch(() => {});
+      sessions.clear();
+      vi.restoreAllMocks();
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    });
+
+    const api = (method: string, url: string, body?: unknown) => realFetch(`${base}${url}`, {
+      method, headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    async function newToken(name: string, extra: Record<string, unknown> = {}): Promise<{ id: number; token: string }> {
+      const res = await api("POST", "/admin/tokens", { name, connection: conn(SALES), ...extra });
+      expect(res.status).toBe(201);
+      return await res.json() as { id: number; token: string };
+    }
+    async function open(token: string): Promise<{ client: Client; transport: StreamableHTTPClientTransport }> {
+      const client = new Client({ name: "it-ro", version: "1" });
+      const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } });
+      await client.connect(transport);
+      clients.push(client);
+      return { client, transport };
+    }
+    const tools = async (c: Client) => (await c.listTools()).tools.map(t => t.name);
+    const rows = async (c: Client) => text(await c.callTool({ name: "query", arguments: { sql: "SELECT COUNT(*) AS n FROM scratch" } }));
+    const insert = (c: Client, id: number) => c.callTool({ name: "execute", arguments: { sql: `INSERT INTO scratch VALUES (${id})` } });
+
+    it("a normal token writes; a read_only token has no execute tool and nothing is written", async () => {
+      const rw = await open((await newToken("rw")).token);
+      expect(await tools(rw.client)).toContain("execute");
+      expect((await insert(rw.client, 1)).isError).toBeFalsy();
+      expect(await rows(rw.client)).toMatch(/\b1\b/);
+
+      const ro = await open((await newToken("ro", { read_only: true })).token);
+      const names = await tools(ro.client);
+      expect(names).not.toContain("execute");
+      expect(names).toEqual(expect.arrayContaining(["query", "list_tables", "describe_table"]));
+      const refused = await insert(ro.client, 2);
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toMatch(/read-only/);
+      expect(await rows(ro.client)).toMatch(/\b1\b/); // still just the first row
+      expect((await ro.client.callTool({ name: "query", arguments: { sql: "DELETE FROM scratch" } })).isError).toBe(true); // query tool refuses DML too
+      expect(await rows(ro.client)).toMatch(/\b1\b/);
+    });
+
+    it("switching the token via the admin API applies to the open session", async () => {
+      const t = await newToken("toggle");
+      const { client } = await open(t.token);
+      expect(await tools(client)).toContain("execute");
+
+      expect((await api("PATCH", `/admin/tokens/${t.id}`, { read_only: true })).status).toBe(200);
+      expect(await tools(client)).not.toContain("execute");
+      expect((await insert(client, 10)).isError).toBe(true);
+
+      expect((await api("PATCH", `/admin/tokens/${t.id}`, { read_only: false })).status).toBe(200);
+      expect(await tools(client)).toContain("execute");
+      expect((await insert(client, 11)).isError).toBeFalsy();
+      const list = await (await api("GET", "/admin/tokens")).json() as { tokens: { name: string; read_only?: boolean }[] };
+      expect(list.tokens.find(x => x.name === "toggle")).not.toHaveProperty("read_only");
+    });
+
+    it("ORA_READ_ONLY=true makes every token read-only, also for sessions that are already open", async () => {
+      const { client } = await open((await newToken("env")).token);
+      expect(await tools(client)).toContain("execute");
+      process.env.ORA_READ_ONLY = "true";
+      expect(await tools(client)).not.toContain("execute");
+      expect((await insert(client, 20)).isError).toBe(true);
+      delete process.env.ORA_READ_ONLY;
+      expect(await tools(client)).toContain("execute");
+    });
+
+    it("the admin API rejects a non-boolean read_only", async () => {
+      expect((await api("POST", "/admin/tokens", { name: "bad", read_only: "yes" })).status).toBe(400);
+    });
+
+    it("a session cannot be resumed by another token (403) and the owner keeps working", async () => {
+      const a = await open((await newToken("owner")).token);
+      const other = (await newToken("thief")).token;
+      const sid = a.transport.sessionId as string;
+      expect(sid).toBeTruthy();
+      const res = await realFetch(`${base}/mcp`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${other}`, "mcp-session-id": sid, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+      expect(res.status).toBe(403);
+      expect(await tools(a.client)).toContain("query");
     });
   });
 });

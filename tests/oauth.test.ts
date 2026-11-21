@@ -217,6 +217,12 @@ describe("resolveAccess", () => {
     expect(r).toMatchObject({ allowed: true, admin: false, connection: null, clientConnection: "none", assignment: "1" });
   });
 
+  it("read_only: the most restrictive matching assignment wins", () => {
+    expect(resolveAccess(id({ groups: ["a", "b"] }), [A({ id: 1, group: "a" }), A({ id: 2, group: "b", read_only: true })]).readOnly).toBe(true);
+    expect(resolveAccess(id({ groups: ["a"] }), [A({ id: 1, group: "a" })]).readOnly).toBe(false);
+    expect(assignmentError({ group: "a", read_only: "yes" })).toMatch(/read_only/);
+  });
+
   it("uses the group's connection", () => {
     const conn = { host: "team-a" };
     expect(resolveAccess(id(), [A({ id: 1, group: "g2", connection: conn, client_connection: "credentials" })]))

@@ -49,7 +49,8 @@ vi.mock("../src/lib.js", async () => ({
   clientConnectionFromHeaders: (await vi.importActual<typeof import("../src/lib.js")>("../src/lib.js")).clientConnectionFromHeaders,
   readFileEnv: vi.fn(),
   getAuthToken: vi.fn(() => ""),
-  checkAuth: vi.fn().mockResolvedValue({ ok: true, name: "admin", connection: null, clientConnection: "none" }),
+  envReadOnly: vi.fn(() => false),
+  checkAuth: vi.fn().mockResolvedValue({ ok: true, name: "admin", connection: null, clientConnection: "none", readOnly: false }),
   authenticateAdmin: vi.fn(async () => ({ ok: true, name: "admin", method: "token" })),
   allAssignments: vi.fn(() => []),
   audit: vi.fn(),
@@ -89,7 +90,7 @@ afterEach(async () => {
   createPool.mockClear();
   await closeAllPools();
   sessions.clear();
-  vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "admin", connection: null, clientConnection: "none" });
+  vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "admin", connection: null, clientConnection: "none", readOnly: false });
 });
 
 // ── getPool ───────────────────────────────────────────────────────────────────
@@ -431,7 +432,7 @@ describe("handleRequest", () => {
     it("audits the start of a session of an OAuth user", async () => {
       vi.mocked(audit).mockClear();
       vi.mocked(checkAuth).mockResolvedValueOnce({
-        ok: true, name: "alice@example.com", connection: null, clientConnection: "none",
+        ok: true, name: "alice@example.com", connection: null, clientConnection: "none", readOnly: false,
         identity: { sub: "oid-alice", email: "alice@example.com", name: "Alice", assignment: "3", admin: false },
       });
       await handleRequest(makeReq("POST", "/mcp"), makeRes());
@@ -474,14 +475,14 @@ describe("handleRequest", () => {
     });
 
     it("rejects invalid headers (400)", async () => {
-      vi.mocked(checkAuth).mockResolvedValueOnce({ ok: true, name: "t", connection: null, clientConnection: "full" });
+      vi.mocked(checkAuth).mockResolvedValueOnce({ ok: true, name: "t", connection: null, clientConnection: "full", readOnly: false });
       const res = makeRes();
       await handleRequest(makeReq("POST", "/mcp", { headers: { "x-oracle-host": "evil", "x-oracle-wallet-location": "/x" } }), res);
       expect(res.writeHead).toHaveBeenCalledWith(400, expect.any(Object));
     });
 
     it("uses the client credentials, logs the target and closes the pool with the session", async () => {
-      vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "t", connection: null, clientConnection: "credentials" });
+      vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "t", connection: null, clientConnection: "credentials", readOnly: false });
       await handleRequest(makeReq("POST", "/mcp", { headers: clientHeaders }), makeRes());
       expect(mockTransport.handleRequest).toHaveBeenCalledTimes(1);
       const onclose = initSession("s1");
@@ -493,7 +494,7 @@ describe("handleRequest", () => {
 
       // Later requests of the session are re-checked against the token's current permission
       sessions.set("s1", mockTransport as any);
-      vi.mocked(checkAuth).mockResolvedValueOnce({ ok: true, name: "t", connection: null, clientConnection: "none" });
+      vi.mocked(checkAuth).mockResolvedValueOnce({ ok: true, name: "t", connection: null, clientConnection: "none", readOnly: false });
       const res = makeRes();
       await handleRequest(makeReq("POST", "/mcp", { headers: { "mcp-session-id": "s1" } }), res);
       expect(res.writeHead).toHaveBeenCalledWith(403, expect.any(Object));
@@ -505,11 +506,69 @@ describe("handleRequest", () => {
     });
 
     it("full mode lets the client choose the target", async () => {
-      vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "t", connection: { tns_alias: "PROD", user: "u", password: "p" }, clientConnection: "full" });
+      vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "t", connection: { tns_alias: "PROD", user: "u", password: "p" }, clientConnection: "full", readOnly: false });
       await handleRequest(makeReq("POST", "/mcp", { headers: { ...clientHeaders, "x-oracle-host": "db2", "x-oracle-service-name": "S2" } }), makeRes());
       initSession("s2");
       await capturedHandlers.CALL_TOOL({ params: { name: "list_schemas", arguments: {} } }).catch(() => {});
       expect(createPool).toHaveBeenCalledWith(expect.objectContaining({ user: "scott", connectString: "db2:1521/S2" }));
+    });
+  });
+
+  describe("read-only and session binding", () => {
+    function initSession(id: string): () => void {
+      const opts = vi.mocked(StreamableHTTPServerTransport).mock.calls.at(-1)![0] as any;
+      opts.onsessioninitialized(id);
+      return mockTransport.onclose as unknown as () => void;
+    }
+    const callTool = (name: string) => capturedHandlers.CALL_TOOL({ params: { name, arguments: { sql: "DELETE FROM t" } } });
+
+    it("hides and refuses execute in read-only mode, re-evaluated per request", async () => {
+      const state = { readOnly: true };
+      createMcpServer(async () => mockPool as any, "ro", "-", undefined, state);
+      let { tools } = await capturedHandlers.LIST_TOOLS({});
+      expect(tools.map((t: { name: string }) => t.name)).not.toContain("execute");
+      const res = await callTool("execute");
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toMatch(/read-only/);
+      expect(vi.mocked(log)).toHaveBeenCalledWith("warn", "AUTH", expect.stringContaining('reason="read-only"'));
+      expect(mockPool.getConnection).not.toHaveBeenCalled();
+
+      state.readOnly = false;
+      ({ tools } = await capturedHandlers.LIST_TOOLS({}));
+      expect(tools.map((t: { name: string }) => t.name)).toContain("execute");
+    });
+
+    it("an admin switching the token to read-only applies to the open session", async () => {
+      vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "t", connection: null, clientConnection: "none", readOnly: false });
+      await handleRequest(makeReq("POST", "/mcp"), makeRes());
+      initSession("s-ro");
+      sessions.set("s-ro", mockTransport as any);
+      vi.mocked(checkAuth).mockResolvedValueOnce({ ok: true, name: "t", connection: null, clientConnection: "none", readOnly: true });
+      await handleRequest(makeReq("POST", "/mcp", { headers: { "mcp-session-id": "s-ro" } }), makeRes());
+      const { tools } = await capturedHandlers.LIST_TOOLS({});
+      expect(tools.map((t: { name: string }) => t.name)).not.toContain("execute");
+    });
+
+    it("refuses to resume a session with another principal", async () => {
+      vi.mocked(checkAuth).mockResolvedValue({ ok: true, name: "alice", connection: null, clientConnection: "none", readOnly: false });
+      await handleRequest(makeReq("POST", "/mcp"), makeRes());
+      const onclose = initSession("s-own");
+      sessions.set("s-own", mockTransport as any);
+      mockTransport.handleRequest.mockClear();
+      vi.mocked(checkAuth).mockResolvedValueOnce({ ok: true, name: "mallory", connection: null, clientConnection: "none", readOnly: false });
+      const res = makeRes();
+      await handleRequest(makeReq("POST", "/mcp", { headers: { "mcp-session-id": "s-own" } }), res);
+      expect(res.writeHead).toHaveBeenCalledWith(403, expect.any(Object));
+      expect(mockTransport.handleRequest).not.toHaveBeenCalled();
+      expect(vi.mocked(log)).toHaveBeenCalledWith("warn", "AUTH", expect.stringContaining("session belongs to another principal"));
+      onclose();
+    });
+
+    it("serves the admin page with security headers", async () => {
+      const res = makeRes();
+      await handleRequest(makeReq("GET", "/admin"), res);
+      const call = res.writeHead.mock.calls[0];
+      if (call[0] === 200) expect(call[1]).toMatchObject({ "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff" });
     });
   });
 

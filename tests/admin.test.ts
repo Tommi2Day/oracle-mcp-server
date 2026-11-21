@@ -130,6 +130,25 @@ describe("handleAdminRequest", () => {
     expect(writtenStore().tokens[0]).not.toHaveProperty("client_connection");
   });
 
+  it("stores read_only on create and PATCH, rejects non-booleans", async () => {
+    let res = makeRes();
+    await handleAdminRequest(makeReq("POST", "/admin/tokens", { body: JSON.stringify({ name: "r", read_only: true }) }), res);
+    expect(resBody(res)).toMatchObject({ name: "r", read_only: true });
+    expect(writtenStore().tokens[0].read_only).toBe(true);
+
+    res = makeRes();
+    await handleAdminRequest(makeReq("POST", "/admin/tokens", { body: JSON.stringify({ name: "r", read_only: "yes" }) }), res);
+    expect(res.writeHead).toHaveBeenCalledWith(400, expect.any(Object));
+
+    mockWriteFile.mockClear();
+    clearTokenStoreCache();
+    seedStore([makeToken({ read_only: true })]);
+    res = makeRes();
+    await handleAdminRequest(makeReq("PATCH", "/admin/tokens/1", { body: JSON.stringify({ read_only: false }) }), res);
+    expect(res.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+    expect(writtenStore().tokens[0]).not.toHaveProperty("read_only");
+  });
+
   it("PATCH with connection null resets to default", async () => {
     seedStore([makeToken({ connection: { host: "old" } })]);
     const res = makeRes();

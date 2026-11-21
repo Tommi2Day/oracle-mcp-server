@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import crypto from "node:crypto";
 import { makeReq, makeRes } from "./helpers.js";
 
 const { mockReadFile, mockWriteFile } = vi.hoisted(() => ({
@@ -13,7 +14,7 @@ vi.mock("node:fs", () => ({
 import {
   getLogLevel, isLogEnabled, log, getClientIp, extractBearer, hashToken, checkAuth, checkAdminAuth,
   loadTokenStore, saveTokenStore, migrateTokenStore, clearTokenStoreCache, validateConnection,
-  cleanConnection, toSafeToken, clientConnectionFromHeaders, clientHeaderName, type TokenRecord,
+  cleanConnection, toSafeToken, clientConnectionFromHeaders, clientHeaderName, clearAuthThrottle, type TokenRecord,
 } from "../src/lib.js";
 
 const ENOENT = () => { throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); };
@@ -33,6 +34,9 @@ afterEach(() => {
   delete process.env.AUTH_TOKEN;
   delete process.env.LOG_LEVEL;
   delete process.env.STORE_ENCRYPTION_KEY;
+  delete process.env.ORA_READ_ONLY;
+  delete process.env.AUTH_MAX_FAILURES;
+  clearAuthThrottle();
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -71,7 +75,7 @@ describe("getClientIp / extractBearer", () => {
 
 describe("checkAuth", () => {
   it("allows anonymous access when AUTH_TOKEN is unset", async () => {
-    expect(await checkAuth(makeReq("POST", "/mcp"), makeRes())).toEqual({ ok: true, name: "anonymous", connection: null, clientConnection: "none" });
+    expect(await checkAuth(makeReq("POST", "/mcp"), makeRes())).toEqual({ ok: true, name: "anonymous", connection: null, clientConnection: "none", readOnly: false });
   });
   it("accepts the admin token", async () => {
     process.env.AUTH_TOKEN = "admin-tok";
@@ -90,7 +94,7 @@ describe("checkAuth", () => {
     const conn = { tns_alias: "PROD", user: "app", password: "pw" };
     mockReadFile.mockReturnValue(JSON.stringify({ tokens: [token({ connection: conn })], next_id: 2 }));
     const r = await checkAuth(makeReq("POST", "/mcp", { headers: { authorization: "Bearer secret-token" } }), makeRes());
-    expect(r).toEqual({ ok: true, name: "t1", connection: conn, clientConnection: "none" });
+    expect(r).toEqual({ ok: true, name: "t1", connection: conn, clientConnection: "none", readOnly: false });
     expect(mockWriteFile).toHaveBeenCalled(); // last_used_at updated
   });
   it("returns the client_connection permission of file tokens and ORA_CLIENT_CONNECTION for the admin token", async () => {
@@ -122,7 +126,67 @@ describe("checkAuth", () => {
   });
 });
 
+describe("read-only and failed-login throttle", () => {
+  const bearer = (t: string) => makeReq("POST", "/mcp", { headers: { authorization: `Bearer ${t}` } });
+
+  it("marks read_only file tokens and honours ORA_READ_ONLY for everyone", async () => {
+    process.env.AUTH_TOKEN = "admin-tok";
+    mockReadFile.mockReturnValue(JSON.stringify({ tokens: [token({ read_only: true })], next_id: 2 }));
+    expect(await checkAuth(bearer("secret-token"), makeRes())).toMatchObject({ ok: true, readOnly: true });
+    expect(await checkAuth(bearer("admin-tok"), makeRes())).toMatchObject({ ok: true, readOnly: false });
+    process.env.ORA_READ_ONLY = "true";
+    expect(await checkAuth(bearer("admin-tok"), makeRes())).toMatchObject({ readOnly: true });
+    delete process.env.AUTH_TOKEN;
+    expect(await checkAuth(makeReq("POST", "/mcp"), makeRes())).toMatchObject({ name: "anonymous", readOnly: true });
+  });
+
+  it("answers 429 with Retry-After after AUTH_MAX_FAILURES failed attempts", async () => {
+    process.env.AUTH_TOKEN = "admin-tok";
+    process.env.AUTH_MAX_FAILURES = "3";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mockReadFile.mockReturnValue(JSON.stringify({ tokens: [token()], next_id: 2 }));
+    for (let i = 0; i < 3; i++) expect((await checkAuth(bearer("wrong"), makeRes())).ok).toBe(false);
+    const res = makeRes();
+    // even a valid token is refused while the IP is throttled
+    expect((await checkAuth(bearer("secret-token"), res)).ok).toBe(false);
+    expect(res.writeHead).toHaveBeenCalledWith(429, expect.objectContaining({ "Retry-After": expect.any(String) }));
+  });
+
+  it("does not count requests without a token and can be switched off", async () => {
+    process.env.AUTH_TOKEN = "admin-tok";
+    process.env.AUTH_MAX_FAILURES = "2";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 5; i++) await checkAuth(makeReq("POST", "/mcp", { headers: { authorization: "" } }), makeRes());
+    const res = makeRes();
+    await checkAuth(makeReq("POST", "/mcp", { headers: { authorization: "" } }), res);
+    expect(res.writeHead).toHaveBeenCalledWith(401, expect.anything());
+    process.env.AUTH_MAX_FAILURES = "0";
+    for (let i = 0; i < 5; i++) await checkAuth(bearer("wrong"), makeRes());
+    const res2 = makeRes();
+    await checkAuth(bearer("wrong"), res2);
+    expect(res2.writeHead).toHaveBeenCalledWith(401, expect.anything());
+  });
+});
+
 describe("token store encryption", () => {
+  it("still reads legacy enc:v1 values and re-encrypts them as v2 at startup", () => {
+    process.env.STORE_ENCRYPTION_KEY = "k";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const key = crypto.createHash("sha256").update("k").digest();
+    const iv = crypto.randomBytes(12);
+    const c = crypto.createCipheriv("aes-256-gcm", key, iv);
+    const ct = Buffer.concat([c.update("old-pw", "utf8"), c.final()]);
+    const v1 = `enc:v1:${iv.toString("hex")}:${c.getAuthTag().toString("hex")}:${ct.toString("hex")}`;
+    const raw = JSON.stringify({ tokens: [token({ connection: { host: "h", password: v1 } })], next_id: 2 });
+    mockReadFile.mockReturnValue(raw);
+    expect(loadTokenStore().tokens[0].connection?.password).toBe("old-pw");
+    clearTokenStoreCache();
+    migrateTokenStore();
+    const written = mockWriteFile.mock.calls[0][1] as string;
+    expect(written).toContain("enc:v2:");
+    expect(written).not.toContain("enc:v1:");
+  });
+
   it("returns an empty store when the file is missing", () => {
     expect(loadTokenStore()).toEqual({ tokens: [], next_id: 1 });
   });
@@ -133,7 +197,7 @@ describe("token store encryption", () => {
     const written = mockWriteFile.mock.calls[0][1] as string;
     expect(written).not.toContain("\"pw\"");
     expect(written).not.toContain("wpw");
-    expect(written.match(/enc:v1:/g)).toHaveLength(2);
+    expect(written.match(/enc:v2:/g)).toHaveLength(2);
 
     clearTokenStoreCache();
     mockReadFile.mockReturnValueOnce(written);
@@ -145,7 +209,7 @@ describe("token store encryption", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     mockReadFile.mockReturnValueOnce(JSON.stringify({ tokens: [token({ connection: { host: "h", password: "pw" } })], next_id: 2 }));
     migrateTokenStore();
-    expect(mockWriteFile.mock.calls[0][1]).toContain("enc:v1:");
+    expect(mockWriteFile.mock.calls[0][1]).toContain("enc:v2:");
   });
 
   it("migrate is a no-op without key", () => {
