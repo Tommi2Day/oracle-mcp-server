@@ -5,7 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Security hardening, ported from pg-mcp-server 1.2.0. **Read "Changed" before upgrading:** an HTTP server without
+## [1.2.0] - 2026-11-21
+
+Security hardening. **Read "Changed" before upgrading:** an HTTP server without
 `AUTH_TOKEN`/OAuth no longer starts.
 
 ### Added
@@ -39,6 +41,7 @@ Security hardening, ported from pg-mcp-server 1.2.0. **Read "Changed" before upg
 - MCP sessions are bound to the principal that opened them: resuming an `mcp-session-id` with another token or user is
   answered with 403 (`reason="session belongs to another principal"`)
 - Pending OAuth logins (`/auth/login`, unauthenticated) are capped; an oversized request body closes the connection
+- Client-supplied connect strings (`client_connection: full`) are also checked percent-decoded: `TNS%5FADMIN=…` and similar encodings can no longer reference server-side wallets or TNS_ADMIN directories
 
 ## [1.1.0] - 2026-11-14
 

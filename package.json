@@ -1,6 +1,6 @@
 {
   "name": "oracle-mcp-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Oracle Database MCP Server for AI tools – stdio & HTTP",
   "license": "Apache-2.0",
   "author": "Tommi2Day",
