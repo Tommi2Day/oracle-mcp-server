@@ -128,6 +128,25 @@ SQL text only at `LOG_LEVEL=debug`.
   `tests/oidc/keycloak-realm.json`, issuer `http://localhost:8081/realms/oracle-mcp`, real login form). They create/drop the schemas `MCPT_SALES`, `MCPT_HR`,
   `MCPT_SK` and the user `MCPT_READER`; the CI job `integration` runs them.
 
+## Release checklist (before tagging)
+
+Do these in addition to the version sync below; report the result of each in the release preparation.
+
+1. **Security review** of everything that changed since the last release: auth and session paths (`checkAuth`,
+   `authenticateAdmin`, session binding, throttle), client-supplied connections (`applyClientConnection`: no server
+   paths, also percent-encoded), SQL built from input (`perf.ts`), admin UI escaping (`x()` for every value in
+   `innerHTML`), logging of secrets, `npm audit --omit=dev`. Fixes go to `CHANGELOG.md` under *Security*.
+2. **Image scan with Trivy** of the thin and the thick image. CI gates on it, but run it before tagging:
+   build with `docker build --no-cache --pull` (a cached `apk`/`apt` layer shows stale OS CVEs), then
+   `docker save` each image to a tar and run
+   `docker run --rm -v <dir>:/scan:ro aquasec/trivy:latest image --input /scan/<img>.tar --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`
+   (no Docker socket needed). Expected: 0 findings in both.
+3. **Screenshots** in `docs/images/admin-*.png` must show every admin UI feature of the release (new toggles,
+   columns, fields). Regenerate them when `admin.html` changed: run the built server locally with a seeded
+   `TOKENS_FILE` (tokens and assignments, `OAUTH_ISSUER` set so the assignments section shows) and capture headless
+   Chrome with `puppeteer-core` (viewport 1280×607 at device scale 2 for the token list; `en-US` dates), then
+   update the captions in `README.md`. Check each picture before replacing the old one.
+
 ## Version sync
 
 `package.json`, `openapi.json` (`info.version`) and `helm/oracle-mcp-server/Chart.yaml` (`version`, `appVersion`)
