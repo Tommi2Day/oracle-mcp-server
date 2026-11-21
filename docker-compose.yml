@@ -93,6 +93,11 @@ services:
 
       # ── Authentication / token store ──────────────────────────────────────
       AUTH_TOKEN: "${AUTH_TOKEN:-}"
+      # The server refuses to start without AUTH_TOKEN/OAuth unless this is "true" (development only)
+      ALLOW_ANONYMOUS: "${ALLOW_ANONYMOUS:-}"
+      # Disable the execute tool for every client; failed-login throttle per IP (0 = off)
+      ORA_READ_ONLY: "${ORA_READ_ONLY:-}"
+      AUTH_MAX_FAILURES: "${AUTH_MAX_FAILURES:-20}"
       TOKENS_FILE: /data/tokens.json
       STORE_ENCRYPTION_KEY: "${STORE_ENCRYPTION_KEY:-}"
 

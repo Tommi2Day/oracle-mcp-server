@@ -103,6 +103,15 @@ spec:
                   key: {{ .Values.auth.existingSecretKey | default "token" }}
             {{- end }}
 
+            {{- if .Values.auth.allowAnonymous }}
+            - name: ALLOW_ANONYMOUS
+              value: "true"
+            {{- end }}
+            {{- if .Values.server.readOnly }}
+            - name: ORA_READ_ONLY
+              value: "true"
+            {{- end }}
+
             # ── OAuth 2.0 / OIDC ──────────────────────────────────────────
             {{- if and .Values.oauth.enabled .Values.oauth.issuer }}
             - name: OAUTH_ISSUER

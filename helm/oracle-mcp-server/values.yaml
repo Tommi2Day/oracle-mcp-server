@@ -93,9 +93,11 @@ tnsAdmin:
 
 # ── Authentication ────────────────────────────────────────────────────────────
 auth:
-  # Bearer token for /mcp endpoint. Empty → auth disabled (local/dev only!)
+  # Bearer token for /mcp endpoint. Empty (and no oauth) → the pod refuses to start unless allowAnonymous is true.
   # Generate: openssl rand -hex 32
   token: ""
+  # Start without authentication (development only!): sets ALLOW_ANONYMOUS=true
+  allowAnonymous: false
   # existingSecret: "my-auth-secret"   # Secret key must be "token"
   # existingSecretKey: "token"
   # Key to encrypt per-token passwords at rest in tokens.json (AES-256-GCM)
@@ -151,6 +153,8 @@ server:
   name: ""
   # Log level: debug | info | warn | error. SQL text of tool calls is only logged at debug.
   logLevel: info
+  # Disable the execute tool for every client (ORA_READ_ONLY); tokens and OAuth assignments also have a read_only flag
+  readOnly: false
   port: 3000
   transport: http
 
