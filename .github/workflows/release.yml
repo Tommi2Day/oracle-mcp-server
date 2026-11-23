@@ -228,6 +228,33 @@ jobs:
           fi
           echo "${GHCR_IMAGE}:${tag} is public"
 
+      # Every push leaves :sha-<short> and :sha-<short>-thick tags on Docker Hub. Keep the newest ones, delete the rest.
+      # Needs a DOCKERHUB_TOKEN with delete scope; a failure only warns and never fails the release.
+      - name: Prune old sha tags on Docker Hub
+        continue-on-error: true
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          KEEP: "10"
+        run: |
+          jwt=$(jq -n --arg u "$HUB_USER" --arg p "$HUB_TOKEN" '{username:$u,password:$p}' \
+            | curl -fsS -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/users/login | jq -r .token)
+          [ -n "$jwt" ] && [ "$jwt" != null ] || { echo "::warning::Docker Hub login failed, skipping prune"; exit 0; }
+          url="https://hub.docker.com/v2/repositories/${IMAGE}/tags?page_size=100&ordering=last_updated"
+          tags=""
+          while [ -n "$url" ] && [ "$url" != null ]; do
+            page=$(curl -fsS -H "Authorization: JWT $jwt" "$url")
+            tags="$tags $(echo "$page" | jq -r '.results[].name | select(startswith("sha-"))')"
+            url=$(echo "$page" | jq -r .next)
+          done
+          # newest first; skip the KEEP newest
+          for t in $(echo $tags | tr ' ' '\n' | tail -n +$((KEEP + 1))); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: JWT $jwt" \
+              "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${t}/")
+            echo "delete ${IMAGE}:${t} -> HTTP ${code}"
+            [ "$code" = 204 ] || echo "::warning::could not delete ${IMAGE}:${t} (HTTP ${code}); does the token have delete scope?"
+          done
+
       - name: Job summary
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
@@ -287,7 +314,15 @@ jobs:
         run: |
           # Release notes: the CHANGELOG.md section of this version, followed by the generated notes
           awk -v v="$TAG" '/^## \[/ { p = (index($0, "[" v "]") > 0); next } p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
-          if [ -s "$RUNNER_TEMP/notes.md" ]; then
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # re-release: the release already exists, refresh title and notes
+            # (gh release edit has no --generate-notes, so only the CHANGELOG section is used)
+            if [ -s "$RUNNER_TEMP/notes.md" ]; then
+              gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+            else
+              gh release edit "$TAG" --title "$TAG"
+            fi
+          elif [ -s "$RUNNER_TEMP/notes.md" ]; then
             gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
           else
             echo "::warning::No CHANGELOG.md section for $TAG, using generated notes only"
